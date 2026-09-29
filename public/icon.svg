@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a8a"/>
+      <stop offset="50%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a"/>
+      <stop offset="50%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <!-- Background with rounded corners -->
+  <rect width="512" height="512" rx="108" fill="url(#bgGrad)"/>
+  <rect x="16" y="16" width="480" height="480" rx="92" fill="none" stroke="#3b82f6" stroke-width="6" opacity="0.3"/>
+  
+  <!-- Outer Gold Shield / Seal Ring -->
+  <circle cx="256" cy="256" r="185" fill="none" stroke="url(#goldGrad)" stroke-width="8" opacity="0.8"/>
+  <circle cx="256" cy="256" r="172" fill="#1e293b" fill-opacity="0.6"/>
+
+  <!-- Scales of Justice -->
+  <!-- Central Pillar -->
+  <rect x="250" y="130" width="12" height="210" rx="6" fill="url(#goldGrad)"/>
+  <!-- Base Pedestal -->
+  <path d="M196 350 L316 350 L300 370 L212 370 Z" fill="url(#goldGrad)"/>
+  <rect x="176" y="370" width="160" height="18" rx="5" fill="url(#goldGrad)"/>
+  
+  <!-- Top Finial -->
+  <circle cx="256" cy="120" r="14" fill="url(#goldGrad)"/>
+  
+  <!-- Crossbeam -->
+  <rect x="140" y="160" width="232" height="12" rx="6" fill="url(#goldGrad)"/>
+  
+  <!-- Left Pan Strings and Plate -->
+  <line x1="160" y1="172" x2="135" y2="230" stroke="#fcd34d" stroke-width="4"/>
+  <line x1="160" y1="172" x2="185" y2="230" stroke="#fcd34d" stroke-width="4"/>
+  <path d="M120 230 Q160 255 200 230 Z" fill="url(#goldGrad)" filter="url(#shadow)"/>
+  
+  <!-- Right Pan Strings and Plate -->
+  <line x1="352" y1="172" x2="327" y2="230" stroke="#fcd34d" stroke-width="4"/>
+  <line x1="352" y1="172" x2="377" y2="230" stroke="#fcd34d" stroke-width="4"/>
+  <path d="M312 230 Q352 255 392 230 Z" fill="url(#goldGrad)" filter="url(#shadow)"/>
+
+  <!-- Boleta Document / Checkmark Accent -->
+  <rect x="220" y="260" width="72" height="90" rx="6" fill="#ffffff" filter="url(#shadow)"/>
+  <line x1="232" y1="278" x2="280" y2="278" stroke="#0284c7" stroke-width="4" stroke-linecap="round"/>
+  <line x1="232" y1="294" x2="280" y2="294" stroke="#64748b" stroke-width="3" stroke-linecap="round"/>
+  <line x1="232" y1="310" x2="268" y2="310" stroke="#64748b" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="270" cy="328" r="10" fill="#10b981"/>
+  <path d="M265 328 L269 332 L276 324" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,8 @@
+{
+  "name": "Remix uac",
+  "description": "Imported from GitHub: renzomolina03/uac",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

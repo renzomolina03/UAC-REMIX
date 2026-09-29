@@ -1,0 +1,209 @@
+import React, { useEffect, useState, useRef } from 'react';
+import { Printer, Download, X, CheckCircle2, FileText, AlertCircle } from 'lucide-react';
+import type { jsPDF } from 'jspdf';
+import { safeSavePDF } from '../utils/exportPDF';
+
+export interface EventoImpresionDirectaDetail {
+  blobUrl: string;
+  fileName: string;
+  doc: jsPDF;
+  titulo?: string;
+}
+
+export const VisorImpresionModal: React.FC = () => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [blobUrl, setBlobUrl] = useState<string>('');
+  const [fileName, setFileName] = useState<string>('');
+  const [titulo, setTitulo] = useState<string>('');
+  const [docInstance, setDocInstance] = useState<jsPDF | null>(null);
+  const [imprimiendo, setImprimiendo] = useState(false);
+  const [printBlockedNotice, setPrintBlockedNotice] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    const handleImpresionDirecta = (e: Event) => {
+      const customEvent = e as CustomEvent<EventoImpresionDirectaDetail>;
+      if (!customEvent.detail) return;
+
+      const { blobUrl: url, fileName: name, doc, titulo: tit } = customEvent.detail;
+      setBlobUrl(url);
+      setFileName(name || 'documento.pdf');
+      setTitulo(tit || name.replace(/\.pdf$/i, '').replace(/_/g, ' '));
+      setDocInstance(doc);
+      setIsOpen(true);
+      setPrintBlockedNotice(false);
+      setImprimiendo(true);
+
+      // Intentar auto-imprimir al cargar
+      setTimeout(() => {
+        ejecutarImpresion();
+      }, 700);
+    };
+
+    window.addEventListener('uac-impresion-directa', handleImpresionDirecta);
+    return () => {
+      window.removeEventListener('uac-impresion-directa', handleImpresionDirecta);
+    };
+  }, []);
+
+  const ejecutarImpresion = () => {
+    try {
+      if (iframeRef.current?.contentWindow) {
+        iframeRef.current.contentWindow.focus();
+        iframeRef.current.contentWindow.print();
+        setImprimiendo(false);
+        return;
+      }
+    } catch (err) {
+      console.warn('Iframe print bloqueado por política de sandbox:', err);
+    }
+
+    setImprimiendo(false);
+    setPrintBlockedNotice(true);
+  };
+
+  const handleDescargarOpcional = () => {
+    if (docInstance) {
+      safeSavePDF(docInstance, fileName);
+    } else if (blobUrl) {
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => document.body.removeChild(a), 500);
+    }
+  };
+
+  const handleCerrar = () => {
+    setIsOpen(false);
+    // Revocar blob url después de un tiempo prudente
+    if (blobUrl) {
+      setTimeout(() => {
+        try {
+          URL.revokeObjectURL(blobUrl);
+        } catch (e) {}
+      }, 60000);
+    }
+  };
+
+  if (!isOpen || !blobUrl) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-hidden animate-in fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full border border-slate-200 overflow-hidden flex flex-col max-h-[96vh] animate-in zoom-in-95">
+        
+        {/* Cabecera del Visor */}
+        <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-emerald-600 text-white shadow-md flex items-center justify-center">
+              <Printer className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-base font-bold text-white tracking-tight">
+                  Impresión Directa del Sistema
+                </h3>
+                <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Sin descargar a disco
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 truncate max-w-md sm:max-w-xl">
+                {titulo}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCerrar}
+              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+              title="Cerrar visor"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Barra Informativa y de Acciones Rápidas */}
+        <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-2 text-xs text-slate-700">
+            <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span>
+              Documento preparado en memoria listo para imprimir directamente.
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handleDescargarOpcional}
+              className="px-3 py-2 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold rounded-xl border border-slate-300 transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer"
+              title="Descargar una copia en archivo PDF si desea conservarlo en su computadora"
+            >
+              <Download className="w-3.5 h-3.5 text-slate-600" />
+              <span>Descargar PDF (Opcional)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={ejecutarImpresion}
+              disabled={imprimiendo}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              <Printer className="w-4 h-4" />
+              <span>{imprimiendo ? 'Enviando...' : 'Imprimir Ahora (Diálogo de Impresora)'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Aviso si el navegador bloquea la llamada automática por sandbox */}
+        {printBlockedNotice && (
+          <div className="bg-amber-50 border-b border-amber-200 px-5 py-2.5 flex items-center justify-between text-xs text-amber-900 gap-2 shrink-0">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                💡 Puede usar el botón <strong>&quot;Imprimir Ahora&quot;</strong> o hacer clic en el icono de <strong>Impresora 🖨️</strong> situado en la barra de herramientas superior del documento para imprimir directamente.
+              </span>
+            </div>
+            <button 
+              type="button" 
+              onClick={() => setPrintBlockedNotice(false)}
+              className="text-amber-800 hover:text-amber-950 font-bold ml-2 underline text-[11px]"
+            >
+              Entendido
+            </button>
+          </div>
+        )}
+
+        {/* Visor interactivo embebido */}
+        <div className="flex-1 bg-slate-100 p-2 sm:p-4 overflow-hidden flex flex-col min-h-0">
+          <iframe
+            ref={iframeRef}
+            src={`${blobUrl}#toolbar=1&navpanes=0`}
+            className="w-full h-full min-h-[55vh] rounded-xl border border-slate-300 bg-white shadow-inner"
+            title="Vista previa de documento judicial para impresión directa"
+          />
+        </div>
+
+        {/* Pie con Estado y Botón de Cierre */}
+        <div className="px-5 py-3 bg-white border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+          <div className="text-[11px] text-slate-500">
+            Archivo generado temporalmente: <strong className="text-slate-700">{fileName}</strong> • Ningún archivo fue descargado automáticamente.
+          </div>
+
+          <button
+            type="button"
+            onClick={handleCerrar}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
+          >
+            Finalizar / Cerrar
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
+};
