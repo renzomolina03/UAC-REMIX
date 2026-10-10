@@ -11,7 +11,7 @@ export const TRIBUNALES_REGISTRADOS: TribunalInfo[] = [
   { id: 'E2', codigo: 'E2', nombre: 'TRIBUNAL DE EJECUCIÓN 2', tipo: 'EJECUCION' },
   { id: 'TPM1', codigo: 'TPM1', nombre: 'TRIBUNAL PRIMERO PENAL MUNICIPAL (TPM1)', tipo: 'TPM' },
   { id: 'TPM2', codigo: 'TPM2', nombre: 'TRIBUNAL SEGUNDO PENAL MUNICIPAL (TPM2)', tipo: 'TPM' },
-  { id: 'SPA 1', codigo: 'SPA 1', nombre: 'SALA PENAL DE ADOLESCENTES 1 (SPA 1)', tipo: 'SPA' },
+  { id: 'SPA 1', codigo: 'SPA 1', nombre: 'SECCIÓN PENAL DE ADOLESCENTES (SPA 1)', tipo: 'SPA' },
   { id: 'OTRO', codigo: 'OTRO', nombre: 'OTRO TRIBUNAL (ESPECIFICAR / FORÁNEO)', tipo: 'CONTROL' },
 ];
 
@@ -951,7 +951,7 @@ export const BOLETAS_INICIALES: BoletaJudicial[] = [
     createdAt: '2026-02-02T10:55:00Z',
     updatedAt: '2026-02-04T17:15:00Z',
   },
-  // --- SALA PENAL DE ADOLESCENTES 1 (SPA 1) ---
+  // --- SECCIÓN PENAL DE ADOLESCENTES (SPA 1) ---
   {
     id: 'bol-spa1-1',
     numeroItem: 37,
@@ -967,7 +967,7 @@ export const BOLETAS_INICIALES: BoletaJudicial[] = [
     alguacilPractica: 'RENZO',
     estado: 'PRACTICADA',
     devueltaAlTribunal: true,
-    acuseRecibidoPor: 'SECRETARÍA SALA ADOLESCENTES 1',
+    acuseRecibidoPor: 'SECRETARÍA SECCIÓN ADOLESCENTES',
     fechaDevueltaTribunal: '2026-02-04',
     fechaRecibidoUAC: '2026-02-03',
     acuseGenerado: true,
@@ -990,7 +990,7 @@ export const BOLETAS_INICIALES: BoletaJudicial[] = [
     alguacilPractica: 'WUILMAR',
     estado: 'PRACTICADA',
     devueltaAlTribunal: true,
-    acuseRecibidoPor: 'SECRETARÍA SALA ADOLESCENTES 1',
+    acuseRecibidoPor: 'SECRETARÍA SECCIÓN ADOLESCENTES',
     fechaDevueltaTribunal: '2026-02-04',
     fechaRecibidoUAC: '2026-02-03',
     acuseGenerado: true,
@@ -1013,7 +1013,7 @@ export const BOLETAS_INICIALES: BoletaJudicial[] = [
     alguacilPractica: 'ROXANA',
     estado: 'PRACTICADA',
     devueltaAlTribunal: true,
-    acuseRecibidoPor: 'SECRETARÍA SALA ADOLESCENTES 1',
+    acuseRecibidoPor: 'SECRETARÍA SECCIÓN ADOLESCENTES',
     fechaDevueltaTribunal: '2026-02-04',
     fechaRecibidoUAC: '2026-02-03',
     acuseGenerado: true,

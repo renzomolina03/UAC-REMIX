@@ -67,12 +67,279 @@ export function safeSavePDF(doc: jsPDF, rawFileName: string) {
 }
 
 /**
- * Imprime un documento PDF directamente en el sistema sin necesidad de descargarlo primero a disco.
- * 1. Aplica doc.autoPrint() para que el motor de renderizado abra el diálogo de impresión del sistema.
- * 2. Emite el evento 'uac-impresion-directa' para que el visor interactivo de la aplicación muestre la vista previa y controles inmediatos.
- * 3. Invoca la impresión silenciosa mediante iframe sin guardar archivos en la carpeta de descargas del usuario.
+ * Envía el contenido HTML oficial a la impresora configurado específicamente para Hoja Tipo Oficio Vertical.
+ * Utiliza un iframe invisible dedicado con estilos completos e independientes para garantizar
+ * que el diálogo nativo de la impresora siempre muestre el documento nítido y completo.
  */
-export function safePrintPDF(doc: jsPDF, rawFileName: string = 'documento.pdf', titulo?: string) {
+export function imprimirHtmlDirecto(htmlContent: string) {
+  try {
+    // 1. Inyectar en #uac-print-area para soporte de window.print()
+    let printArea = document.getElementById('uac-print-area');
+    if (!printArea) {
+      printArea = document.createElement('div');
+      printArea.id = 'uac-print-area';
+      document.body.appendChild(printArea);
+    }
+    printArea.innerHTML = htmlContent;
+
+    // 2. Crear iframe aislado temporal para ejecutar el diálogo de la impresora de forma infalible
+    const iframeId = 'uac-direct-print-iframe';
+    let printIframe = document.getElementById(iframeId) as HTMLIFrameElement | null;
+    if (printIframe) {
+      try {
+        printIframe.remove();
+      } catch (e) {}
+    }
+
+    printIframe = document.createElement('iframe');
+    printIframe.id = iframeId;
+    printIframe.setAttribute('style', 'position: fixed; top: -10000px; left: -10000px; width: 1000px; height: 1400px; opacity: 0; pointer-events: none; border: none;');
+    document.body.appendChild(printIframe);
+
+    const iframeDoc = printIframe.contentDocument || printIframe.contentWindow?.document;
+    if (iframeDoc) {
+      iframeDoc.open();
+      iframeDoc.write(`
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+          <meta charset="utf-8" />
+          <title>Impresión Oficial Judicial</title>
+          <style>
+            @page {
+              size: legal portrait;
+              margin: 6mm 8mm 6mm 8mm;
+            }
+            * {
+              box-sizing: border-box;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            html, body {
+              margin: 0;
+              padding: 0;
+              background: #ffffff !important;
+              color: #0f172a !important;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            }
+            .hoja-pagina-oficio {
+              page-break-after: always;
+              break-after: page;
+              margin-bottom: 20px;
+            }
+            .hoja-pagina-oficio:last-child {
+              page-break-after: auto;
+              break-after: auto;
+              margin-bottom: 0;
+            }
+            table {
+              page-break-inside: auto;
+              break-inside: auto;
+            }
+            tr {
+              page-break-inside: avoid !important;
+              break-inside: avoid !important;
+            }
+            td {
+              page-break-inside: avoid !important;
+              break-inside: avoid !important;
+            }
+          </style>
+        </head>
+        <body>
+          ${htmlContent}
+        </body>
+        </html>
+      `);
+      iframeDoc.close();
+
+      setTimeout(() => {
+        try {
+          if (printIframe?.contentWindow) {
+            printIframe.contentWindow.focus();
+            printIframe.contentWindow.print();
+            return;
+          }
+        } catch (iframeErr) {
+          console.warn('Iframe print error, usando window.print():', iframeErr);
+        }
+        window.focus();
+        window.print();
+      }, 250);
+      return;
+    }
+  } catch (err) {
+    console.error('Error al preparar impresión directa:', err);
+  }
+
+  // Fallback directo en ventana principal
+  setTimeout(() => {
+    window.focus();
+    window.print();
+  }, 200);
+}
+
+/**
+ * Genera el documento HTML correspondiente a las hojas del lote en formato oficial Hoja Tipo Oficio Vertical
+ */
+export function generarHtmlHojaOficio(
+  hojas: HojaLote[],
+  config: ConfiguracionDespacho,
+  filtroTribunal?: string,
+  esSobreseimiento?: boolean
+): string {
+  return hojas.map((hoja, idx) => {
+    const alguacilesEnEstaHoja = Array.from(
+      new Set(
+        hoja.boletas
+          .map(b => (b.alguacilPractica || '').trim())
+          .filter(a => a && !a.toUpperCase().includes('SIN ALGUACIL') && !a.toUpperCase().includes('SIN ASIGNAR'))
+      )
+    );
+    const textoAlguaciles = alguacilesEnEstaHoja.length > 0
+      ? `Alguacil(es): ${alguacilesEnEstaHoja.join(' - ')}`
+      : 'Alguacil: Sin Asignar';
+    const textoFecha = hoja.fechaAsignacion 
+      ? `Fecha Asig: ${formatFechaDisplay(hoja.fechaAsignacion)}`
+      : `Fecha: ${new Date().toLocaleDateString('es-ES')}`;
+
+    const idUacFormateado = hoja.idHoja.toUpperCase().startsWith('UAC')
+      ? hoja.idHoja.toUpperCase()
+      : `UAC: ${hoja.idHoja.padStart(4, '0')}`;
+
+    const rows = hoja.boletas.map((b, rowIdx) => {
+      const itemNum = b.numeroItem !== undefined ? b.numeroItem : (hoja.rangoItems ? (hoja.rangoItems.desde + rowIdx) : (rowIdx + 1));
+      const algStr = (b.alguacilPractica || '').trim();
+      const algUpper = algStr.toUpperCase();
+      const alguacilImpresion = (!algStr || algUpper.includes('SIN ALGUACIL') || algUpper.includes('SIN ASIGNAR')) ? '' : algStr;
+      const fAud = (b.seccionRuta === 'SOBRESEIMIENTO' || esSobreseimiento)
+        ? 'NOTIFICACIÓN SOBRESEIMIENTO'
+        : ((b.esSoloNotificacion || b.fechaAudiencia === 'NOTIFICACION' || !b.fechaAudiencia) ? 'NOTIFICACIÓN' : formatFechaDisplay(b.fechaAudiencia));
+      const hAud = (b.esSoloNotificacion || b.fechaAudiencia === 'NOTIFICACION' || !b.fechaAudiencia) ? '' : (b.horaAudiencia || '');
+
+      return `
+        <tr style="height: 22px; font-size: 8px; ${rowIdx % 2 === 1 ? 'background-color: #f8fafc;' : ''}">
+          <td style="text-align: center; font-weight: bold; width: 20px; border: 1px solid #cbd5e1;">${itemNum}</td>
+          <td style="font-weight: bold; padding: 2px 4px; border: 1px solid #cbd5e1;">${b.numeroCausa}</td>
+          <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${b.boletaNumero}</td>
+          <td style="text-align: center; padding: 2px 4px; border: 1px solid #cbd5e1; font-weight: 500;">${b.notificadoCitado}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; font-size: ${fAud.includes('NOTIFICAC') ? '7px' : '8px'};">${fAud}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1;">${hAud}</td>
+          <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${b.tribunal}</td>
+          <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${hasArticulo(b, '167') ? '1' : ''}</td>
+          <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${hasArticulo(b, '168') ? '1' : ''}</td>
+          <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${hasArticulo(b, '169') ? '1' : ''}</td>
+          <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${hasArticulo(b, '170') ? '1' : ''}</td>
+          <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${hasArticulo(b, '171') ? '1' : ''}</td>
+          <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${hasArticulo(b, '165') ? '1' : ''}</td>
+          <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${hasArticulo(b, 'S_165') ? '1' : ''}</td>
+          <td style="text-align: center; border: 1px solid #cbd5e1; font-size: 7.5px;">${alguacilImpresion}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const c = hoja.conteosArticulos;
+    const fechaAsigTexto = hoja.fechaAsignacion ? formatFechaDisplay(hoja.fechaAsignacion) : formatFechaDisplay(new Date().toISOString().slice(0, 10));
+
+    return `
+      <div class="hoja-pagina-oficio" style="width: 100%; box-sizing: border-box; page-break-after: always; padding: 0 0 10px 0; font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;">
+        <!-- Encabezado Institucional -->
+        <div style="background-color: #0f172a; color: #ffffff; text-align: center; padding: 6px 10px; margin-bottom: 8px; border-radius: 4px;">
+          <div style="font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px;">${config.entePrincipal}</div>
+          <div style="font-size: 9px;">${config.circuitoJudicial}</div>
+          <div style="font-size: 8.5px; opacity: 0.9;">${config.unidad}</div>
+        </div>
+
+        <!-- Subtítulo de Ruta -->
+        <div style="margin-bottom: 8px;">
+          <div style="font-size: 11px; font-weight: bold; color: #0f172a; text-transform: uppercase;">
+            ${esSobreseimiento ? 'RUTA DE SOBRESEIMIENTO' : 'RUTA DE NOTIFICACIÓN Y CITACIÓN'}
+          </div>
+          <div style="font-size: 9px; font-weight: bold; color: #1e293b; margin-top: 2px;">
+            F. ASIG: ${fechaAsigTexto}
+          </div>
+          <div style="font-size: 8px; color: #475569; margin-top: 2px;">
+            ${textoAlguaciles}${filtroTribunal ? ` | Tribunal: ${filtroTribunal}` : ' | Todos los Tribunales'}
+          </div>
+        </div>
+
+        <!-- Tabla Oficial (con espacio ampliado al eliminar F. ASIG.) -->
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid #94a3b8;">
+          <thead>
+            <tr style="background-color: #1e293b; color: #ffffff; font-size: 7.5px; height: 24px;">
+              <th style="border: 1px solid #64748b; width: 20px;">Nº</th>
+              <th style="border: 1px solid #64748b; width: 115px; text-align: left; padding-left: 4px;">Nº CAUSA</th>
+              <th style="border: 1px solid #64748b; width: 55px;">BOLETA Nº</th>
+              <th style="border: 1px solid #64748b; width: 185px;">NOTIFICADO Y CITADO</th>
+              <th style="border: 1px solid #64748b; width: 90px;">${esSobreseimiento ? 'NOTIF. SOBRESEIMIENTO' : 'F. AUDIENCIA'}</th>
+              <th style="border: 1px solid #64748b; width: 35px;">HORA</th>
+              <th style="border: 1px solid #64748b; width: 30px;">TRI</th>
+              <th style="border: 1px solid #64748b; background-color: #8F9CA8; color: #000; width: 20px;">167</th>
+              <th style="border: 1px solid #64748b; background-color: #5C98E2; color: #000; width: 20px;">168</th>
+              <th style="border: 1px solid #64748b; background-color: #8EA8BE; color: #000; width: 20px;">169</th>
+              <th style="border: 1px solid #64748b; background-color: #9DCE64; color: #000; width: 20px;">170</th>
+              <th style="border: 1px solid #64748b; background-color: #E7444B; color: #000; width: 20px;">171</th>
+              <th style="border: 1px solid #64748b; background-color: #FCE444; color: #000; width: 20px;">165</th>
+              <th style="border: 1px solid #64748b; background-color: #DF7A40; color: #000; width: 22px;">S 165</th>
+              <th style="border: 1px solid #64748b; width: 75px;">ALGUACIL</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+
+        <!-- Resumen y Firmas -->
+        <div style="display: flex; justify-content: ${hoja.estaLlena ? 'space-between' : 'flex-end'}; align-items: stretch; margin-top: 8px;">
+          ${hoja.estaLlena ? `
+          <!-- Resumen de Folio (Solo cuando la hoja esté llena completa) -->
+          <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 6px 8px; width: 55%; font-size: 7.5px; line-height: 1.4;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
+              <span style="font-weight: bold; color: #0f172a; font-size: 8px;">RESUMEN:</span>
+              <span style="background-color: #0f172a; color: #ffffff; padding: 1.5px 5px; border-radius: 3px; font-weight: bold; font-size: 7.5px;">${idUacFormateado}</span>
+            </div>
+            <div>Boletas en esta Hoja: <strong>${hoja.cantidad} de ${hoja.capacidad}</strong> (LLENA)</div>
+            <div>Devueltas al Tribunal: <strong>${hoja.totalDevueltas} (${hoja.porcentajeEfectividad}%)</strong> | Pendientes: <strong>${hoja.pendientes}</strong></div>
+            <div>Tribunales: ${hoja.tribunalesInvolucrados.slice(0, 5).join(', ')}${hoja.tribunalesInvolucrados.length > 5 ? '...' : ''}</div>
+            <div style="margin-top: 2px; font-size: 7px; color: #334155;">
+              COPP: 167(${c['167']}) 168(${c['168']}) 169(${c['169']}) 170(${c['170']}) 171(${c['171']}) 165(${c['165']}) S 165(${c['S_165']})
+            </div>
+          </div>
+          ` : ''}
+
+          <!-- Firmas -->
+          <div style="display: flex; justify-content: space-around; width: ${hoja.estaLlena ? '42%' : '50%'}; text-align: center; align-items: flex-end; padding-bottom: 4px;">
+            <div style="width: 46%;">
+              <div style="border-top: 1px solid #475569; padding-top: 4px; font-weight: bold; font-size: 7.5px; color: #0f172a;">ALGUACIL DISTRIBUIDOR</div>
+              <div style="font-size: 6.5px; color: #64748b;">Unidad de Actos y Comunicación</div>
+            </div>
+            <div style="width: 46%;">
+              <div style="border-top: 1px solid #475569; padding-top: 4px; font-weight: bold; font-size: 7.5px; color: #0f172a;">COORDINACIÓN / SECRETARÍA</div>
+              <div style="font-size: 6.5px; color: #64748b;">Sello y Recibido Conforme</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pie de Página Oficial Centrado -->
+        <div style="margin-top: 6px; font-size: 7px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 3px; text-align: center;">
+          <span>Hoja Oficial: ${idUacFormateado} • Pág. ${idx + 1} de ${hojas.length}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+/**
+ * Imprime un documento PDF directamente en el sistema sin necesidad de descargarlo primero a disco.
+ * 1. Emite el evento 'uac-impresion-directa' para que el visor interactivo de la aplicación muestre la vista previa y controles inmediatos.
+ * 2. Si viene contenido HTML formateado para Hoja Tipo Oficio Vertical, lo envía directamente al motor de impresión del navegador.
+ */
+export function safePrintPDF(
+  doc: jsPDF, 
+  rawFileName: string = 'documento.pdf', 
+  titulo?: string,
+  htmlPrintContent?: string
+) {
   try {
     try {
       doc.autoPrint();
@@ -91,42 +358,15 @@ export function safePrintPDF(doc: jsPDF, rawFileName: string = 'documento.pdf', 
         fileName: rawFileName,
         doc,
         titulo: sanitizedTitle,
+        htmlContent: htmlPrintContent,
       }
     });
     window.dispatchEvent(event);
 
-    // Intentar también imprimir vía iframe invisible
-    const iframe = document.createElement('iframe');
-    iframe.id = 'uac-direct-print-iframe';
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    iframe.style.zIndex = '-9999';
-    iframe.src = blobUrl;
-    document.body.appendChild(iframe);
-
-    iframe.onload = () => {
-      setTimeout(() => {
-        try {
-          iframe.contentWindow?.focus();
-          iframe.contentWindow?.print();
-        } catch (printErr) {
-          console.warn('Iframe print bloqueado por política de seguridad del navegador:', printErr);
-        }
-      }, 400);
-    };
-
-    // Limpieza de iframe
-    setTimeout(() => {
-      try {
-        if (document.body.contains(iframe)) {
-          document.body.removeChild(iframe);
-        }
-      } catch (e) {}
-    }, 120000);
+    // Si viene contenido HTML preparado para imprimir, enviarlo de inmediato
+    if (htmlPrintContent) {
+      imprimirHtmlDirecto(htmlPrintContent);
+    }
 
   } catch (err) {
     console.error('Error al preparar impresión directa:', err);
@@ -143,10 +383,11 @@ export function procesarSalidaPDF(
   doc: jsPDF, 
   rawFileName: string, 
   modo: ModoSalidaDocumento = 'imprimir', 
-  titulo?: string
+  titulo?: string,
+  htmlPrintContent?: string
 ) {
   if (modo === 'imprimir') {
-    safePrintPDF(doc, rawFileName, titulo);
+    safePrintPDF(doc, rawFileName, titulo, htmlPrintContent);
   } else {
     safeSavePDF(doc, rawFileName);
   }
@@ -167,8 +408,8 @@ export function exportarBoletasPDF(
     return;
   }
 
-  const capacidad = opcionesHojas?.capacidadPorHoja || 30;
-  const idInicial = opcionesHojas?.idInicial || 'uac0001';
+  const capacidad = opcionesHojas?.capacidadPorHoja || 40;
+  const idInicial = opcionesHojas?.idInicial || 'UAC: 0001';
   
   // Calcular todas las hojas del lote según su capacidad y cortes de página
   const todasLasHojas = calcularHojasLote(boletasAExportar, capacidad, idInicial);
@@ -183,16 +424,17 @@ export function exportarBoletasPDF(
     return;
   }
 
+  // Configurado estrictamente en Hoja Tipo Oficio Vertical (Legal Portrait: 215.9 x 355.6 mm)
   const doc = new jsPDF({
-    orientation: 'landscape',
+    orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
   const esSobreseimiento = opcionesHojas?.seccion === 'SOBRESEIMIENTO' || 
     (boletasAExportar.length > 0 && boletasAExportar.every(b => b.seccionRuta === 'SOBRESEIMIENTO'));
 
-  // Columnas para la tabla del listado
+  // Columnas para la tabla del listado (ampliadas al suprimir F. ASIG.)
   const tableHeaders = [
     'Nº',
     'Nº CAUSA',
@@ -200,7 +442,6 @@ export function exportarBoletasPDF(
     'NOTIFICADO Y CITADO',
     esSobreseimiento ? 'NOTIFICACIÓN SOBRESEIMIENTO' : 'F. AUDIENCIA',
     'HORA',
-    'F. ASIG.',
     'TRI',
     '167',
     '168',
@@ -212,37 +453,42 @@ export function exportarBoletasPDF(
     'ALGUACIL',
   ];
 
-  // Renderizar cada hoja seleccionada en su propia página física
+  // Renderizar cada hoja seleccionada en su propia página física tipo Oficio Vertical
   hojasAImprimir.forEach((hoja, sheetIdx) => {
     if (sheetIdx > 0) {
-      doc.addPage('a4', 'landscape');
+      doc.addPage('legal', 'portrait');
     }
 
-    // 1. Encabezado institucional superior
+    // 1. Encabezado institucional superior (ancho de hoja oficio: 215.9mm)
     doc.setFillColor(15, 23, 42); // slate-900
-    doc.rect(0, 0, 297, 15, 'F');
+    doc.rect(0, 0, 215.9, 15, 'F');
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.5);
     doc.setTextColor(255, 255, 255);
-    doc.text(config.entePrincipal, 148.5, 5.5, { align: 'center' });
+    doc.text(config.entePrincipal, 107.95, 5.5, { align: 'center' });
 
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
-    doc.text(config.circuitoJudicial, 148.5, 9.5, { align: 'center' });
-    doc.text(config.unidad, 148.5, 13, { align: 'center' });
+    doc.text(config.circuitoJudicial, 107.95, 9.5, { align: 'center' });
+    doc.text(config.unidad, 107.95, 13, { align: 'center' });
 
     // 2. Subtítulo de ruta (Izquierda)
-    doc.setFontSize(10.5);
+    doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(15, 23, 42);
+    const fechaAsigDoc = hoja.fechaAsignacion ? formatFechaDisplay(hoja.fechaAsignacion) : formatFechaDisplay(new Date().toISOString().slice(0, 10));
     const tituloRuta = esSobreseimiento
-      ? `CONTROL DE BOLETAS JUDICIALES - SOBRESEIMIENTO - RUTA ${config.mesRutaActual.toUpperCase()}`
-      : `CONTROL DE BOLETAS JUDICIALES - RUTA ${config.mesRutaActual.toUpperCase()}`;
-    doc.text(tituloRuta, 14, 21);
+      ? 'RUTA DE SOBRESEIMIENTO'
+      : 'RUTA DE NOTIFICACIÓN Y CITACIÓN';
+    doc.text(tituloRuta, 8, 19.5);
+
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 41, 59);
+    doc.text(`F. ASIG: ${fechaAsigDoc}`, 8, 23.5);
 
     // Detección precisa de alguaciles asignados en esta hoja
-    // Si aún no se le ha asignado alguacil a las boletas de esta hoja, NO debe mostrar alguaciles asignados
     const alguacilesEnEstaHoja = Array.from(
       new Set(
         hoja.boletas
@@ -255,46 +501,18 @@ export function exportarBoletasPDF(
       ? `Alguacil(es): ${alguacilesEnEstaHoja.join(' - ')}`
       : 'Alguacil: Sin Asignar';
 
-    const textoFecha = hoja.fechaAsignacion 
-      ? `Fecha Asig: ${formatFechaDisplay(hoja.fechaAsignacion)}`
-      : `Fecha: ${new Date().toLocaleDateString('es-ES')}`;
-
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(71, 85, 105);
     doc.text(
-      `${textoAlguaciles} | ${textoFecha}${filtroTribunal ? ` | Tribunal: ${filtroTribunal}` : ' | Todos los Tribunales'}`,
-      14,
-      25.5
+      `${textoAlguaciles}${filtroTribunal ? ` | Tribunal: ${filtroTribunal}` : ' | Todos los Tribunales'}`,
+      8,
+      27
     );
 
-    // 3. Recuadro destacado de Folio de Hoja (Limpia, UAC al final del listado)
-    const badgeX = 205;
-    const badgeY = 16.5;
-    const badgeW = 78;
-    const badgeH = 10;
-    doc.setFillColor(241, 245, 249);
-    doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.5, 1.5, 'F');
-    doc.setDrawColor(203, 213, 225);
-    doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.5, 1.5, 'S');
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(`FOLIO: PÁG. ${hoja.numeroHoja} DE ${todasLasHojas.length}`, badgeX + 4, badgeY + 4.2);
-
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(71, 85, 105);
-    const estadoHojaText = hoja.estaLlena 
-      ? `HOJA LLENA (${hoja.cantidad}/${hoja.capacidad})` 
-      : `EN CURSO (${hoja.cantidad}/${hoja.capacidad})`;
-    doc.text(`Capacidad: ${estadoHojaText}`, badgeX + 4, badgeY + 8);
-
     // 4. Preparar filas de la tabla correspondientes a esta hoja
-    // Requisito: Si está sin alguacil cuando se imprima que salga en blanco, si está seleccionado algún alguacil en la impresión debe aparecer el alguacil.
     const tableBody = hoja.boletas.map((b, idx) => {
-      const itemNum = (hoja.numeroHoja - 1) * hoja.capacidad + idx + 1;
+      const itemNum = b.numeroItem !== undefined ? b.numeroItem : (hoja.rangoItems ? (hoja.rangoItems.desde + idx) : (idx + 1));
       const algStr = (b.alguacilPractica || '').trim();
       const algUpper = algStr.toUpperCase();
       const alguacilImpresion = (!algStr || algUpper.includes('SIN ALGUACIL') || algUpper.includes('SIN ASIGNAR')) ? '' : algStr;
@@ -308,7 +526,6 @@ export function exportarBoletasPDF(
           ? 'NOTIFICACIÓN SOBRESEIMIENTO' 
           : ((b.esSoloNotificacion || b.fechaAudiencia === 'NOTIFICACION' || !b.fechaAudiencia) ? 'NOTIFICACIÓN' : formatFechaDisplay(b.fechaAudiencia)),
         (b.esSoloNotificacion || b.fechaAudiencia === 'NOTIFICACION' || !b.fechaAudiencia) ? '' : (b.horaAudiencia || ''),
-        formatFechaDisplay(b.fechaAsignacion),
         b.tribunal,
         hasArticulo(b, '167') ? '1' : '',
         hasArticulo(b, '168') ? '1' : '',
@@ -321,20 +538,22 @@ export function exportarBoletasPDF(
       ];
     });
 
-    // 5. Generar tabla de la hoja con jspdf-autotable
+    // 5. Generar tabla de la hoja con jspdf-autotable ajustada para Hoja Tipo Oficio Vertical (ancho útil: ~199.9mm)
     autoTable(doc, {
-      startY: 28,
+      startY: 29.5,
+      margin: { left: 8, right: 8 },
       head: [tableHeaders],
       body: tableBody,
       theme: 'grid',
       styles: {
-        fontSize: 7.2,
-        cellPadding: 1.2,
-        minCellHeight: 6.2,
+        fontSize: 6.8,
+        cellPadding: 1,
+        minCellHeight: 5.5,
         valign: 'middle',
         font: 'helvetica',
         textColor: [15, 23, 42],
       },
+      rowPageBreak: 'avoid',
       headStyles: {
         fillColor: [30, 41, 59], // Slate 800
         textColor: [255, 255, 255],
@@ -342,22 +561,21 @@ export function exportarBoletasPDF(
         halign: 'center',
       },
       columnStyles: {
-        0: { halign: 'center', cellWidth: 8 },
-        1: { halign: 'left', fontStyle: 'bold', cellWidth: 34 },
-        2: { halign: 'center', fontStyle: 'bold', cellWidth: 16 },
-        3: { halign: 'center', cellWidth: 55 }, // NOTIFICADO Y CITADO centrado
-        4: { halign: 'center', cellWidth: 27 }, // F. AUDIENCIA ampliado para que 'NOTIFICACIÓN' quepa sin partir la N
-        5: { halign: 'center', cellWidth: 14 }, // HORA
-        6: { halign: 'center', cellWidth: 15 },
-        7: { halign: 'center', fontStyle: 'bold', cellWidth: 11 },
-        8: { halign: 'center', fontStyle: 'bold', cellWidth: 9 }, // 167
-        9: { halign: 'center', fontStyle: 'bold', cellWidth: 9 }, // 168
-        10: { halign: 'center', fontStyle: 'bold', cellWidth: 9 }, // 169
-        11: { halign: 'center', fontStyle: 'bold', cellWidth: 9 }, // 170
-        12: { halign: 'center', fontStyle: 'bold', cellWidth: 9 }, // 171
-        13: { halign: 'center', fontStyle: 'bold', cellWidth: 9 }, // 165
-        14: { halign: 'center', fontStyle: 'bold', cellWidth: 11 }, // S 165
-        15: { halign: 'center', cellWidth: 24 },   // ALGUACIL
+        0: { halign: 'center', cellWidth: 6 },
+        1: { halign: 'left', fontStyle: 'bold', cellWidth: 32 }, // Nº CAUSA ampliado
+        2: { halign: 'center', fontStyle: 'bold', cellWidth: 16 }, // BOLETA Nº
+        3: { halign: 'center', cellWidth: 50 }, // NOTIFICADO Y CITADO ampliado
+        4: { halign: 'center', cellWidth: 22 }, // F. AUDIENCIA
+        5: { halign: 'center', cellWidth: 9 }, // HORA
+        6: { halign: 'center', fontStyle: 'bold', cellWidth: 8 }, // TRI
+        7: { halign: 'center', fontStyle: 'bold', cellWidth: 5.8 }, // 167
+        8: { halign: 'center', fontStyle: 'bold', cellWidth: 5.8 }, // 168
+        9: { halign: 'center', fontStyle: 'bold', cellWidth: 5.8 }, // 169
+        10: { halign: 'center', fontStyle: 'bold', cellWidth: 5.8 }, // 170
+        11: { halign: 'center', fontStyle: 'bold', cellWidth: 5.8 }, // 171
+        12: { halign: 'center', fontStyle: 'bold', cellWidth: 5.8 }, // 165
+        13: { halign: 'center', fontStyle: 'bold', cellWidth: 6.3 }, // S 165
+        14: { halign: 'center', cellWidth: 19 },   // ALGUACIL
       },
       alternateRowStyles: {
         fillColor: [250, 250, 250],
@@ -366,30 +584,30 @@ export function exportarBoletasPDF(
         if (data.section === 'body' && data.column.index === 4) {
           const val = String(data.cell.raw || '').toUpperCase();
           if (val.includes('NOTIFICAC')) {
-            data.cell.styles.fontSize = 6.7;
-            data.cell.styles.cellPadding = 0.6;
+            data.cell.styles.fontSize = 6.2;
+            data.cell.styles.cellPadding = 0.5;
           }
         }
         if (data.section === 'head') {
-          if (data.column.index === 8) { // 167 Gris
+          if (data.column.index === 7) { // 167 Gris
             data.cell.styles.fillColor = [143, 156, 168];
             data.cell.styles.textColor = [0, 0, 0];
-          } else if (data.column.index === 9) { // 168 Azul
+          } else if (data.column.index === 8) { // 168 Azul
             data.cell.styles.fillColor = [92, 152, 226];
             data.cell.styles.textColor = [0, 0, 0];
-          } else if (data.column.index === 10) { // 169 Azul Acero
+          } else if (data.column.index === 9) { // 169 Azul Acero
             data.cell.styles.fillColor = [142, 168, 190];
             data.cell.styles.textColor = [0, 0, 0];
-          } else if (data.column.index === 11) { // 170 Verde Lima
+          } else if (data.column.index === 10) { // 170 Verde Lima
             data.cell.styles.fillColor = [157, 206, 100];
             data.cell.styles.textColor = [0, 0, 0];
-          } else if (data.column.index === 12) { // 171 Rojo
+          } else if (data.column.index === 11) { // 171 Rojo
             data.cell.styles.fillColor = [231, 68, 75];
             data.cell.styles.textColor = [0, 0, 0];
-          } else if (data.column.index === 13) { // 165 Amarillo
+          } else if (data.column.index === 12) { // 165 Amarillo
             data.cell.styles.fillColor = [252, 228, 68];
             data.cell.styles.textColor = [0, 0, 0];
-          } else if (data.column.index === 14) { // S 165 Naranja
+          } else if (data.column.index === 13) { // S 165 Naranja
             data.cell.styles.fillColor = [223, 122, 64];
             data.cell.styles.textColor = [0, 0, 0];
           }
@@ -398,19 +616,23 @@ export function exportarBoletasPDF(
     });
 
     // 6. Resumen y Firmas oficiales de esta hoja al pie de la página
-    const tableEnd = doc.lastAutoTable?.finalY || 160;
-    const finalY = Math.max(tableEnd + 3, 168);
+    const tableEnd = doc.lastAutoTable?.finalY || 200;
+    const finalY = Math.max(tableEnd + 4, 230);
 
     renderSheetSummaryAndSignatures(doc, config, hoja, todasLasHojas.length, finalY);
 
-    // Pie de página de seguridad
+    // Pie de página de seguridad Centrado: Hoja Oficial: UAC: 0001 • Pág. 1 de 1
     doc.setFontSize(6.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(148, 163, 184);
+    const idUacCentrado = hoja.idHoja.toUpperCase().startsWith('UAC')
+      ? hoja.idHoja.toUpperCase()
+      : `UAC: ${hoja.idHoja.padStart(4, '0')}`;
     doc.text(
-      `Hoja Oficial: ${hoja.idHoja} | Circuito Judicial Penal del Estado Mérida | Impresión de Folio: Pág. ${sheetIdx + 1} de ${hojasAImprimir.length}`,
-      14,
-      206
+      `Hoja Oficial: ${idUacCentrado} • Pág. ${sheetIdx + 1} de ${hojasAImprimir.length}`,
+      107.95,
+      350,
+      { align: 'center' }
     );
   });
 
@@ -421,14 +643,16 @@ export function exportarBoletasPDF(
   } else if (hojasAImprimir.length === todasLasHojas.length) {
     fileName = `Listado_Boletas_Completo_${todasLasHojas[0]?.idHoja}_al_${todasLasHojas[todasLasHojas.length - 1]?.idHoja}_${config.mesRutaActual}.pdf`;
   } else {
-    fileName = `Listado_Boletas_Hojas_Seleccionadas_${hojasAImprimir.length}_folioso_${config.mesRutaActual}.pdf`;
+    fileName = `Listado_Boletas_Hojas_Seleccionadas_${hojasAImprimir.length}_folios_${config.mesRutaActual}.pdf`;
   }
 
   const modo = opcionesHojas?.modoSalida || 'imprimir';
   const tituloDesc = hojasAImprimir.length === 1
-    ? `Listado de Boletas - Folio ${hojasAImprimir[0].idHoja}`
-    : `Listado de Boletas (${hojasAImprimir.length} Folios)`;
-  procesarSalidaPDF(doc, fileName, modo, tituloDesc);
+    ? `Listado de Boletas - Folio ${hojasAImprimir[0].idHoja} (Hoja Oficio)`
+    : `Listado de Boletas (${hojasAImprimir.length} Folios - Hoja Oficio)`;
+
+  const htmlPrint = generarHtmlHojaOficio(hojasAImprimir, config, filtroTribunal, esSobreseimiento);
+  procesarSalidaPDF(doc, fileName, modo, tituloDesc, htmlPrint);
 }
 
 function renderSheetSummaryAndSignatures(
@@ -438,74 +662,212 @@ function renderSheetSummaryAndSignatures(
   totalHojasLote: number,
   startY: number
 ) {
-  // Recuadro de Totales de Esta Hoja
-  doc.setFillColor(241, 245, 249);
-  doc.roundedRect(14, startY, 136, 23, 2, 2, 'F');
-  doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(14, startY, 136, 23, 2, 2, 'S');
+  // En el listado principal, eliminar RESUMEN cuando no esté la hoja llena o lista completa
+  if (hoja.estaLlena) {
+    // Recuadro de Totales de Esta Hoja ajustado al ancho de Hoja Oficio Vertical
+    doc.setFillColor(241, 245, 249);
+    doc.roundedRect(8, startY, 114, 28, 1.5, 1.5, 'F');
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(8, startY, 114, 28, 1.5, 1.5, 'S');
 
-  doc.setFontSize(7.8);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(15, 23, 42);
-  doc.text(`RESUMEN DE FOLIO ${hoja.numeroHoja}/${totalHojasLote}:`, 18, startY + 4.5);
+    doc.setFontSize(7.8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(15, 23, 42);
+    doc.text(`RESUMEN DE FOLIO ${hoja.numeroHoja}/${totalHojasLote}:`, 12, startY + 4.5);
 
-  // Nomenclatura oficial UAC al final del listado para archivo y búsqueda de resultas (Pie de la hoja)
-  const idUacFormateado = hoja.idHoja.toUpperCase().startsWith('UAC') 
-    ? hoja.idHoja.toUpperCase() 
-    : `UAC: ${hoja.idHoja.padStart(4, '0')}`;
+    // Nomenclatura oficial UAC al final del listado para archivo y búsqueda de resultas (Pie de la hoja)
+    const idUacFormateado = hoja.idHoja.toUpperCase().startsWith('UAC') 
+      ? hoja.idHoja.toUpperCase() 
+      : `UAC: ${hoja.idHoja.padStart(4, '0')}`;
 
-  doc.setFillColor(15, 23, 42);
-  doc.roundedRect(88, startY + 1.8, 62, 5.5, 1, 1, 'F');
-  doc.setFontSize(7.8);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(255, 255, 255);
-  doc.text(idUacFormateado, 119, startY + 5.6, { align: 'center' });
+    doc.setFillColor(15, 23, 42);
+    doc.roundedRect(70, startY + 1.8, 48, 5, 1, 1, 'F');
+    doc.setFontSize(7.8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(255, 255, 255);
+    doc.text(idUacFormateado, 94, startY + 5.2, { align: 'center' });
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.2);
-  doc.setTextColor(15, 23, 42);
-  doc.text(
-    `Boletas en esta Hoja: ${hoja.cantidad} de ${hoja.capacidad} (${hoja.estaLlena ? 'LLENA' : 'EN CURSO'})`,
-    18,
-    startY + 9
-  );
-  doc.text(
-    `Devueltas al Tribunal: ${hoja.totalDevueltas} (${hoja.porcentajeEfectividad}%) | Pendientes: ${hoja.pendientes}`,
-    18,
-    startY + 13.5
-  );
-  doc.text(
-    `Tribunales: ${hoja.tribunalesInvolucrados.slice(0, 5).join(', ')}${hoja.tribunalesInvolucrados.length > 5 ? '...' : ''}`,
-    18,
-    startY + 18
-  );
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.2);
+    doc.setTextColor(15, 23, 42);
+    doc.text(
+      `Boletas en esta Hoja: ${hoja.cantidad} de ${hoja.capacidad} (LLENA)`,
+      12,
+      startY + 9
+    );
+    doc.text(
+      `Devueltas al Tribunal: ${hoja.totalDevueltas} (${hoja.porcentajeEfectividad}%) | Pendientes: ${hoja.pendientes}`,
+      12,
+      startY + 13.5
+    );
+    doc.text(
+      `Tribunales: ${hoja.tribunalesInvolucrados.slice(0, 5).join(', ')}${hoja.tribunalesInvolucrados.length > 5 ? '...' : ''}`,
+      12,
+      startY + 18
+    );
 
-  const c = hoja.conteosArticulos;
-  doc.text(`Artículos COPP: 167(${c['167']}) 168(${c['168']}) 169(${c['169']}) 170(${c['170']})`, 76, startY + 10.5);
-  doc.text(`                171(${c['171']}) 165(${c['165']}) S 165(${c['S_165']})`, 76, startY + 15);
+    const c = hoja.conteosArticulos;
+    doc.text(`Artículos COPP: 167(${c['167']}) 168(${c['168']}) 169(${c['169']}) 170(${c['170']})`, 12, startY + 22.5);
+    doc.text(`                171(${c['171']}) 165(${c['165']}) S 165(${c['S_165']})`, 12, startY + 26);
+  }
 
-  // Firmas de Responsabilidad (A la derecha)
-  const firmaY = startY + 14.5;
+  // Firmas de Responsabilidad (A la derecha, dentro del ancho 215.9mm)
+  const firmaY = startY + 15;
   doc.setDrawColor(100, 116, 139);
   
   // Firma 1: Alguacilazgo
-  doc.line(162, firmaY, 217, firmaY);
+  doc.line(128, firmaY, 166, firmaY);
   doc.setFontSize(6.8);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
-  doc.text('ALGUACIL DISTRIBUIDOR', 189.5, firmaY + 3.2, { align: 'center' });
+  doc.text('ALGUACIL DISTRIBUIDOR', 147, firmaY + 3.5, { align: 'center' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.2);
-  doc.text('Unidad de Actos y Comunicación', 189.5, firmaY + 6.2, { align: 'center' });
+  doc.text('Unidad de Actos y Comunicación', 147, firmaY + 6.5, { align: 'center' });
 
   // Firma 2: Tribunal Receptor / Coordinador
-  doc.line(230, firmaY, 285, firmaY);
+  doc.line(170, firmaY, 208, firmaY);
   doc.setFontSize(6.8);
   doc.setFont('helvetica', 'bold');
-  doc.text('COORDINACIÓN / SECRETARÍA', 257.5, firmaY + 3.2, { align: 'center' });
+  doc.text('COORDINACIÓN / SECRETARÍA', 189, firmaY + 3.5, { align: 'center' });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.2);
-  doc.text('Sello y Recibido Conforme', 257.5, firmaY + 6.2, { align: 'center' });
+  doc.text('Sello y Recibido Conforme', 189, firmaY + 6.5, { align: 'center' });
+}
+
+/**
+ * Genera el documento HTML correspondiente a la Planilla de Acuses en formato oficial Hoja Tipo Oficio Vertical
+ */
+export function generarHtmlPlanillaAcuses(
+  tribunalNombre: string,
+  boletasConsolidadas: Array<{
+    numeroCausa: string;
+    boletaNumero: string;
+    tribunal: string;
+    caracteres: string[];
+    notificados: string[];
+    esDevuelta: boolean;
+    fechaDevuelta?: string;
+    recibidaPor?: string;
+  }>,
+  config: ConfiguracionDespacho,
+  textoEntrega: string,
+  alguacilGenerado: string
+): string {
+  const rows = boletasConsolidadas.map((item, idx) => {
+    const caracterDisplay = item.caracteres.length > 0 ? item.caracteres.join(', ') : '-';
+    const personasDisplay = item.notificados.length > 0 ? item.notificados.join(' / ') : '-';
+    const estadoTexto = item.esDevuelta
+      ? (item.fechaDevuelta 
+          ? `<span style="font-weight: bold; color: #166534; display: block; line-height: 1.15; font-size: 7.5px; white-space: nowrap;">ENTREGADO</span><span style="font-size: 7px; color: #475569; display: block; margin-top: 2px; white-space: nowrap; font-family: monospace;">(${formatFechaDisplay(item.fechaDevuelta)})</span>` 
+          : `<span style="font-weight: bold; color: #166534; display: block; font-size: 7.5px; white-space: nowrap;">ENTREGADO</span>`)
+      : `<span style="font-weight: bold; color: #854d0e; display: block; font-size: 7.5px; white-space: nowrap;">POR ENTREGAR</span>`;
+
+    return `
+      <tr style="height: 22px; font-size: 8px; page-break-inside: avoid; break-inside: avoid; ${idx % 2 === 1 ? 'background-color: #f8fafc;' : ''}">
+        <td style="text-align: center; font-weight: bold; width: 24px; border: 1px solid #cbd5e1;">${idx + 1}</td>
+        <td style="font-weight: bold; padding: 2px 5px; border: 1px solid #cbd5e1;">${item.numeroCausa}</td>
+        <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${item.boletaNumero}</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1;">${caracterDisplay}</td>
+        <td style="padding: 2px 5px; border: 1px solid #cbd5e1; font-weight: 500;">${personasDisplay}</td>
+        <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${item.tribunal}</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1; font-size: 7.5px; white-space: nowrap; padding: 2px 5px; width: 100px;">${estadoTexto}</td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <div class="hoja-pagina-oficio" style="width: 100%; box-sizing: border-box; padding: 0 0 10px 0; font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;">
+      <!-- Encabezado Institucional -->
+      <div style="background-color: #0f172a; color: #ffffff; text-align: center; padding: 6px 10px; margin-bottom: 8px; border-radius: 4px;">
+        <div style="font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px;">${config.entePrincipal}</div>
+        <div style="font-size: 9px;">${config.circuitoJudicial}</div>
+        <div style="font-size: 8.5px; opacity: 0.9;">${config.unidad}</div>
+      </div>
+
+      <!-- Título y Datos de Entrega -->
+      <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 6px 10px; margin-bottom: 8px;">
+        <div style="font-size: 10.5px; font-weight: bold; color: #0f172a; text-align: center; margin-bottom: 4px;">
+          PLANILLA DE RELACIÓN Y ENTREGA DE ACUSES DE BOLETAS (HOJA OFICIO)
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 8.5px; color: #334155;">
+          <span><strong>TRIBUNAL DESTINATARIO:</strong> ${tribunalNombre}</span>
+          <span><strong>FECHA DE ENTREGA:</strong> ${textoEntrega}</span>
+          <span><strong>TOTAL:</strong> ${boletasConsolidadas.length} causas</span>
+        </div>
+      </div>
+
+      <!-- Tabla de Acuses -->
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 8px; border: 1px solid #94a3b8;">
+        <thead>
+          <tr style="background-color: #1e293b; color: #ffffff; font-size: 7.5px; height: 24px;">
+            <th style="border: 1px solid #64748b; width: 24px;">Nº</th>
+            <th style="border: 1px solid #64748b; width: 120px; text-align: left; padding-left: 5px;">Nº DE CAUSA</th>
+            <th style="border: 1px solid #64748b; width: 55px;">BOLETA</th>
+            <th style="border: 1px solid #64748b; width: 75px;">CARÁCTER</th>
+            <th style="border: 1px solid #64748b; width: 185px;">PERSONA NOTIFICADA / CITADA</th>
+            <th style="border: 1px solid #64748b; width: 40px;">TRI</th>
+            <th style="border: 1px solid #64748b; width: 100px;">ESTADO</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+
+      ${(() => {
+        const totalBols = boletasConsolidadas.length;
+        const cap = totalBols >= 35 ? (totalBols >= 40 ? 40 : 38) : 30;
+        const devs = boletasConsolidadas.filter(b => b.esDevuelta).length;
+        const pends = totalBols - devs;
+        const pct = totalBols > 0 ? Math.round((devs / totalBols) * 100) : 0;
+        const tribs = Array.from(new Set(boletasConsolidadas.map(b => b.tribunal))).filter(Boolean);
+        const tribsStr = tribs.slice(0, 8).join(', ') + (tribs.length > 8 ? '...' : '');
+
+        let a167 = 0, a168 = 0, a169 = 0, a170 = 0, a171 = 0, a165 = 0, aS165 = 0;
+        boletasConsolidadas.forEach(b => {
+          const arts = (b as any).articulos || [];
+          if (arts.some((a: string) => a.includes('167'))) a167++;
+          if (arts.some((a: string) => a.includes('168'))) a168++;
+          if (arts.some((a: string) => a.includes('169'))) a169++;
+          if (arts.some((a: string) => a.includes('170'))) a170++;
+          if (arts.some((a: string) => a.includes('171'))) a171++;
+          if (arts.some((a: string) => a === '165')) a165++;
+          if (arts.some((a: string) => a.includes('S_165') || a.includes('S 165'))) aS165++;
+        });
+
+        return `
+          <!-- RESUMEN OFICIAL Y CONSTANCIA FORMAL DE ENTREGA DENTRO DEL CUADRO -->
+          <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 8px 12px; margin-bottom: 8px; font-size: 8px; line-height: 1.45; box-sizing: border-box;">
+            <div style="font-weight: bold; color: #0f172a; font-size: 8.5px; margin-bottom: 2px;">RESUMEN:</div>
+            <div>Devueltas al Tribunal: <strong>${devs} (${pct}%)</strong> | Pendientes: <strong>${pends}</strong></div>
+            <div>Tribunales: ${tribsStr}</div>
+            <div style="margin-top: 2px; font-size: 7.5px; color: #334155; font-weight: 500;">
+              Artículos COPP: 167(${a167}) 168(${a168}) 169(${a169}) 170(${a170}) 171(${a171}) 165(${a165}) S 165(${aS165})
+            </div>
+            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #cbd5e1; font-size: 7.5px; color: #0f172a; font-style: italic; line-height: 1.4; word-break: normal;">
+              Se hace formal entrega a la Secretaría de este Despacho Judicial de los acuses de las boletas supra indicadas para ser agregadas a sus respectivos autos y expedientes.
+            </div>
+          </div>
+        `;
+      })()}
+
+      <!-- Firmas Oficiales -->
+      <div style="display: flex; justify-content: space-between; margin-top: 8px; padding: 0 10px;">
+        <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 8px; width: 46%;">
+          <div style="font-size: 8px; font-weight: bold; color: #0f172a; margin-bottom: 4px;">ENTREGADO POR (ALGUACILAZGO):</div>
+          <div style="font-size: 7.5px; color: #334155;">Alguacil: ${alguacilGenerado}</div>
+          <div style="margin-top: 20px; border-top: 1px solid #475569; padding-top: 2px; font-size: 7px; color: #64748b;">Firma y Sello</div>
+        </div>
+        <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 8px; width: 46%;">
+          <div style="font-size: 8px; font-weight: bold; color: #0f172a; margin-bottom: 4px;">RECIBIDO POR (SECRETARÍA TRIBUNAL):</div>
+          <div style="font-size: 7.5px; color: #334155;">Nombre: _________________________________</div>
+          <div style="font-size: 7.5px; color: #334155; margin-top: 2px;">FECHA: ________________ Hora: ___________</div>
+          <div style="margin-top: 16px; border-top: 1px solid #475569; padding-top: 2px; font-size: 7px; color: #64748b;">Firma y Sello Conforme</div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 export function exportarPlanillaAcusesPDF(
@@ -519,40 +881,40 @@ export function exportarPlanillaAcusesPDF(
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
-  // Membrete Judicial
+  // Membrete Judicial (Ancho Hoja Oficio: 215.9mm, centro: 107.95mm)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(15, 23, 42);
-  doc.text(config.entePrincipal, 105, 14, { align: 'center' });
+  doc.text(config.entePrincipal, 107.95, 14, { align: 'center' });
 
   doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
-  doc.text(config.circuitoJudicial, 105, 19, { align: 'center' });
-  doc.text(config.unidad, 105, 23, { align: 'center' });
+  doc.text(config.circuitoJudicial, 107.95, 19, { align: 'center' });
+  doc.text(config.unidad, 107.95, 23, { align: 'center' });
 
   doc.setDrawColor(15, 23, 42);
   doc.setLineWidth(0.5);
-  doc.line(14, 26, 196, 26);
+  doc.line(10, 26, 205.9, 26);
 
   // Título del Oficio de Entrega de Acuses
   doc.setFontSize(11.5);
   doc.setFont('helvetica', 'bold');
-  doc.text('PLANILLA DE RELACIÓN Y ENTREGA DE ACUSES DE BOLETAS', 105, 33, { align: 'center' });
+  doc.text('PLANILLA DE RELACIÓN Y ENTREGA DE ACUSES DE BOLETAS', 107.95, 33, { align: 'center' });
 
-  // Cuadro informativo limpio: ELIMINADO Nº DE OFICIO / CONTROL y FUNCIONARIO ENTREGA
+  // Cuadro informativo limpio
   doc.setFillColor(248, 250, 252);
-  doc.rect(14, 37, 182, 13, 'F');
+  doc.rect(10, 37, 195.9, 13, 'F');
   doc.setDrawColor(203, 213, 225);
-  doc.rect(14, 37, 182, 13, 'S');
+  doc.rect(10, 37, 195.9, 13, 'S');
 
   doc.setFontSize(8.5);
   doc.setFont('helvetica', 'bold');
-  doc.text(`TRIBUNAL DESTINATARIO:`, 18, 45);
+  doc.text(`TRIBUNAL DESTINATARIO:`, 14, 45);
   doc.setFont('helvetica', 'normal');
-  doc.text(tribunalNombre, 62, 45);
+  doc.text(tribunalNombre, 58, 45);
 
   // Fecha de entrega (por regla: se relacionan hoy para entregar mañana, salvo urgente hoy)
   const fechaManana = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
@@ -567,13 +929,11 @@ export function exportarPlanillaAcusesPDF(
     : `${fechaEntregaFinal}`;
 
   doc.setFont('helvetica', 'bold');
-  doc.text(`FECHA DE ENTREGA:`, 128, 45);
+  doc.text(`FECHA DE ENTREGA:`, 135, 45);
   doc.setFont('helvetica', 'normal');
-  doc.text(textoEntrega, 162, 45);
+  doc.text(textoEntrega, 170, 45);
 
   // Ordenar boletas y detectar duplicados por (tri, numeroCausa, boletaNumero)
-  // Requerimiento: Si hay varias boletas con el mismo número de expediente y número de boleta, 
-  // aparece una sola boleta con: Nº, Nº DE CAUSA, BOLETA, PERSONA NOTIFICADA / CITADA, TRI, ART., ESTADO, RECIBIDA POR.
   const boletasConsolidadasMap = new Map<string, {
     numeroCausa: string;
     boletaNumero: string;
@@ -658,7 +1018,7 @@ export function exportarPlanillaAcusesPDF(
   // Ordenar consolidado: mantener el orden de registro
   const boletasConsolidadas = Array.from(boletasConsolidadasMap.values());
 
-  const tableHeaders = ['Nº', 'Nº DE CAUSA', 'BOLETA', 'CARÁCTER', 'PERSONA NOTIFICADA / CITADA', 'TRI', 'ESTADO', 'RECIBIDA'];
+  const tableHeaders = ['Nº', 'Nº DE CAUSA', 'BOLETA', 'CARÁCTER', 'PERSONA NOTIFICADA / CITADA', 'TRI', 'ESTADO'];
   const tableBody = boletasConsolidadas.map((item, idx) => {
     const caracterDisplay = item.caracteres.length > 0 
       ? item.caracteres.join(', ') 
@@ -669,10 +1029,8 @@ export function exportarPlanillaAcusesPDF(
       : '-';
 
     const estadoTexto = item.esDevuelta
-      ? (item.fechaDevuelta ? `ENTREGADO (${formatFechaDisplay(item.fechaDevuelta)})` : 'ENTREGADO')
+      ? (item.fechaDevuelta ? `ENTREGADO\n(${formatFechaDisplay(item.fechaDevuelta)})` : 'ENTREGADO')
       : 'POR ENTREGAR';
-
-    const recibidaTexto = item.recibidaPor ? item.recibidaPor : '___________________';
 
     return [
       idx + 1,
@@ -682,12 +1040,13 @@ export function exportarPlanillaAcusesPDF(
       personasDisplay,
       item.tribunal,
       estadoTexto,
-      recibidaTexto,
     ];
   });
 
   autoTable(doc, {
     startY: 53,
+    margin: { left: 10, right: 10 },
+    tableWidth: 195.9,
     head: [tableHeaders],
     body: tableBody,
     theme: 'grid',
@@ -697,6 +1056,7 @@ export function exportarPlanillaAcusesPDF(
       font: 'helvetica',
       valign: 'middle',
     },
+    rowPageBreak: 'avoid',
     headStyles: {
       fillColor: [15, 23, 42],
       textColor: [255, 255, 255],
@@ -704,79 +1064,112 @@ export function exportarPlanillaAcusesPDF(
       halign: 'center',
     },
     columnStyles: {
-      0: { halign: 'center', cellWidth: 8 }, // Nº
-      1: { halign: 'left', fontStyle: 'bold', cellWidth: 38 }, // Nº DE CAUSA
-      2: { halign: 'center', fontStyle: 'bold', cellWidth: 18 }, // BOLETA
-      3: { halign: 'center', fontStyle: 'bold', cellWidth: 24 }, // CARÁCTER
-      4: { halign: 'left', cellWidth: 42 }, // PERSONA NOTIFICADA / CITADA
-      5: { halign: 'center', fontStyle: 'bold', cellWidth: 12 }, // TRI
-      6: { halign: 'center', cellWidth: 20 }, // ESTADO
-      7: { halign: 'center', cellWidth: 20 }, // RECIBIDA POR
+      0: { halign: 'center', cellWidth: 9 }, // Nº
+      1: { halign: 'left', fontStyle: 'bold', cellWidth: 43 }, // Nº DE CAUSA
+      2: { halign: 'center', fontStyle: 'bold', cellWidth: 19 }, // BOLETA
+      3: { halign: 'center', fontStyle: 'bold', cellWidth: 28 }, // CARÁCTER
+      4: { halign: 'left', cellWidth: 54.9 }, // PERSONA NOTIFICADA / CITADA
+      5: { halign: 'center', fontStyle: 'bold', cellWidth: 14 }, // TRI
+      6: { halign: 'center', cellWidth: 28 }, // ESTADO (ampliado a 28mm para que no se separe nunca)
     },
   });
 
   const finalY = (doc.lastAutoTable?.finalY || 160) + 8;
   const pageHeight = doc.internal.pageSize.height;
 
+  // Determinar Alguacil generado por el sistema
+  const alguacilesLista = Array.from(new Set(boletas.map(b => (b.alguacilPractica || '').trim()).filter(a => a && !a.toUpperCase().includes('SIN ALGUACIL') && !a.toUpperCase().includes('SIN ASIGNAR'))));
+  const alguacilGenerado = (alguacilSeleccionado && !alguacilSeleccionado.toUpperCase().includes('SIN ALGUACIL') && !alguacilSeleccionado.toUpperCase().includes('SIN ASIGNAR'))
+    ? alguacilSeleccionado
+    : (alguacilesLista.length > 0 ? alguacilesLista.join(', ') : 'SIN ASIGNAR');
+
   const renderSignatures = (posY: number) => {
-    // Texto legal
+    // RESUMEN OFICIAL Y CONSTANCIA FORMAL DE ENTREGA DENTRO DEL CUADRO
+    const textoFormalEntrega = 'Se hace formal entrega a la Secretaría de este Despacho Judicial de los acuses de las boletas supra indicadas para ser agregadas a sus respectivos autos y expedientes.';
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.5);
+    const lineasFormal = doc.splitTextToSize(textoFormalEntrega, 187);
+    const boxHeight = 22 + (lineasFormal.length * 3.8) + 4; // Garantiza espacio total para que el texto siempre quede contenido dentro del cuadro
+
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(10, posY, 195.9, boxHeight, 1.5, 1.5, 'F');
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(10, posY, 195.9, boxHeight, 1.5, 1.5, 'S');
+
     doc.setFontSize(8);
-    doc.setFont('helvetica', 'normal');
-    doc.text(
-      `Se hace formal entrega a la Secretaría de este Despacho Judicial de los acuses de las boletas supra indicadas para ser agregadas a sus respectivos autos y expedientes.`,
-      14,
-      posY,
-      { maxWidth: 182 }
-    );
-
-    const firmaBoxY = posY + 6;
-
-    // Determinar Alguacil generado por el sistema
-    const alguacilesLista = Array.from(new Set(boletas.map(b => (b.alguacilPractica || '').trim()).filter(a => a && !a.toUpperCase().includes('SIN ALGUACIL') && !a.toUpperCase().includes('SIN ASIGNAR'))));
-    const alguacilGenerado = (alguacilSeleccionado && !alguacilSeleccionado.toUpperCase().includes('SIN ALGUACIL') && !alguacilSeleccionado.toUpperCase().includes('SIN ASIGNAR'))
-      ? alguacilSeleccionado
-      : (alguacilesLista.length > 0 ? alguacilesLista.join(', ') : 'SIN ASIGNAR');
-
-    // ENTREGADO POR (ALGUACILAZGO):
-    // el nombre del alguacil generado por el sistema
-    // encargado RENZO M.
-    doc.rect(14, firmaBoxY, 86, 38);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
-    doc.text('ENTREGADO POR (ALGUACILAZGO):', 16, firmaBoxY + 5);
+    doc.setTextColor(15, 23, 42);
+    doc.text('RESUMEN:', 14, posY + 4.5);
+
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
-    doc.text(`Alguacil: ${alguacilGenerado}`, 16, firmaBoxY + 13, { maxWidth: 82 });
-    const textoEncargado = config.jefeAlguacilazgo && config.jefeAlguacilazgo !== 'ABG. COORDINADOR DE ALGUACILAZGO'
-      ? `ENCARGADO: ${config.jefeAlguacilazgo}`
-      : 'ENCARGADO:';
-    doc.text(textoEncargado, 16, firmaBoxY + 21);
-    doc.text(`Firma: __________________________________`, 16, firmaBoxY + 31);
+    const totalBols = boletasConsolidadas.length;
+    const devs = boletasConsolidadas.filter(b => b.esDevuelta).length;
+    const pends = totalBols - devs;
+    const pct = totalBols > 0 ? Math.round((devs / totalBols) * 100) : 0;
+    const tribs = Array.from(new Set(boletasConsolidadas.map(b => b.tribunal))).filter(Boolean);
+    const tribsStr = tribs.slice(0, 8).join(', ') + (tribs.length > 8 ? '...' : '');
 
-    // RECIBIDO POR (SECRETARÍA TRIBUNAL):
-    // Nombre: _________________________________
-    // FECHA: ________________ Hora: ___________
-    // Firma y Sello: _____________________
-    doc.rect(110, firmaBoxY, 86, 38);
+    let a167 = 0, a168 = 0, a169 = 0, a170 = 0, a171 = 0, a165 = 0, aS165 = 0;
+    boletasConsolidadas.forEach(b => {
+      const arts = (b as any).articulos || [];
+      if (arts.some((a: string) => a.includes('167'))) a167++;
+      if (arts.some((a: string) => a.includes('168'))) a168++;
+      if (arts.some((a: string) => a.includes('169'))) a169++;
+      if (arts.some((a: string) => a.includes('170'))) a170++;
+      if (arts.some((a: string) => a.includes('171'))) a171++;
+      if (arts.some((a: string) => a === '165')) a165++;
+      if (arts.some((a: string) => a.includes('S_165') || a.includes('S 165'))) aS165++;
+    });
+
+    doc.text(`Devueltas al Tribunal: ${devs} (${pct}%) | Pendientes: ${pends}`, 14, posY + 8.5);
+    doc.text(`Tribunales: ${tribsStr}`, 14, posY + 12.5);
+    doc.text(`Artículos COPP: 167(${a167}) 168(${a168}) 169(${a169}) 170(${a170}) 171(${a171}) 165(${a165}) S 165(${aS165})`, 14, posY + 16.5);
+
+    // Línea divisoria suave dentro del cuadro
+    doc.setDrawColor(226, 232, 240);
+    doc.line(14, posY + 19.5, 201.9, posY + 19.5);
+
+    // Texto de entrega formal DENTRO del cuadro con márgenes internos
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(lineasFormal, 14, posY + 24);
+
+    const firmaBoxY = posY + boxHeight + 4;
+
+    // ENTREGADO POR (ALGUACILAZGO) - Sin ENCARGADO
+    doc.rect(10, firmaBoxY, 94, 30);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
-    doc.text('RECIBIDO POR (SECRETARÍA TRIBUNAL):', 112, firmaBoxY + 5);
+    doc.text('ENTREGADO POR (ALGUACILAZGO):', 12, firmaBoxY + 5);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
-    doc.text(`Nombre: _________________________________`, 112, firmaBoxY + 14);
-    doc.text(`FECHA: ________________ Hora: ___________`, 112, firmaBoxY + 22);
-    doc.text(`Firma y Sello: __________________________`, 112, firmaBoxY + 31);
+    doc.text(`Alguacil: ${alguacilGenerado}`, 12, firmaBoxY + 12, { maxWidth: 90 });
+    doc.text(`Firma y Sello: __________________________`, 12, firmaBoxY + 24);
+
+    // RECIBIDO POR (SECRETARÍA TRIBUNAL)
+    doc.rect(111.9, firmaBoxY, 94, 30);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text('RECIBIDO POR (SECRETARÍA TRIBUNAL):', 114, firmaBoxY + 5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text(`Nombre: _________________________________`, 114, firmaBoxY + 12);
+    doc.text(`FECHA: ________________ Hora: ___________`, 114, firmaBoxY + 18);
+    doc.text(`Firma y Sello: __________________________`, 114, firmaBoxY + 24);
   };
 
-  if (finalY > pageHeight - 50) {
-    doc.addPage();
+  if (finalY > pageHeight - 85) {
+    doc.addPage('legal', 'portrait');
     renderSignatures(20);
   } else {
     renderSignatures(finalY);
   }
 
   const fileName = `Acuse_Entrega_${tribunalNombre.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
-  procesarSalidaPDF(doc, fileName, modoSalida, `Planilla de Acuses - ${tribunalNombre}`);
+  const htmlPrint = generarHtmlPlanillaAcuses(tribunalNombre, boletasConsolidadas, config, textoEntrega, alguacilGenerado);
+  procesarSalidaPDF(doc, fileName, modoSalida, `Planilla de Acuses - ${tribunalNombre} (Hoja Oficio)`, htmlPrint);
 }
 
 /**
@@ -792,23 +1185,70 @@ export async function exportarOficioEstadisticasGlobalesPDF(
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
-  const totalBoletas = boletas.length;
-  const totalDevueltas = boletas.filter(b => b.devueltaAlTribunal).length;
+  let sum167 = 0;
+  let sum168 = 0;
+  let sum169 = 0;
+  let sum170 = 0;
+  let sum171 = 0;
+  let sum165 = 0;
+  let sumS165 = 0;
+  let sumTotal = 0;
+  let sumDevueltas = 0;
+
+  const rows = tribunales.map(t => {
+    const courtBoletas = boletas.filter(b => {
+      if (t.codigo === 'OTRO') {
+        const localCodes = tribunales.filter(x => x.codigo !== 'OTRO').map(x => x.codigo);
+        return !localCodes.some(lc => matchesTribunal(b?.tribunal, lc)) || matchesTribunal(b?.tribunal, 'OTRO');
+      }
+      return matchesTribunal(b?.tribunal, t.codigo);
+    });
+
+    const c167 = courtBoletas.filter(b => hasArticulo(b, '167')).length;
+    const c168 = courtBoletas.filter(b => hasArticulo(b, '168')).length;
+    const c169 = courtBoletas.filter(b => hasArticulo(b, '169')).length;
+    const c170 = courtBoletas.filter(b => hasArticulo(b, '170')).length;
+    const c171 = courtBoletas.filter(b => hasArticulo(b, '171')).length;
+    const c165 = courtBoletas.filter(b => hasArticulo(b, '165')).length;
+    const cS165 = courtBoletas.filter(b => hasArticulo(b, 'S_165')).length;
+    const total = courtBoletas.length;
+    const devueltas = courtBoletas.filter(b => b.devueltaAlTribunal).length;
+    const pct = total > 0 ? `${Math.round((devueltas / total) * 100)}%` : '0%';
+
+    sum167 += c167;
+    sum168 += c168;
+    sum169 += c169;
+    sum170 += c170;
+    sum171 += c171;
+    sum165 += c165;
+    sumS165 += cS165;
+    sumTotal += total;
+    sumDevueltas += devueltas;
+
+    return [
+      `${t.codigo} - ${t.nombre.length > 22 ? t.nombre.slice(0, 20) + '...' : t.nombre}`,
+      c167 || '-',
+      c168 || '-',
+      c169 || '-',
+      c170 || '-',
+      c171 || '-',
+      c165 || '-',
+      cS165 || '-',
+      total,
+      devueltas,
+      pct
+    ];
+  });
+
+  const totalBoletas = sumTotal;
+  const totalDevueltas = sumDevueltas;
   const efectividadGlobal = totalBoletas > 0 ? ((totalDevueltas / totalBoletas) * 100).toFixed(1) : '100.0';
 
-  // Conteo de Artículos COPP para el QR global
-  const total167 = boletas.filter(b => hasArticulo(b, '167')).length;
-  const total168 = boletas.filter(b => hasArticulo(b, '168')).length;
-  const total169 = boletas.filter(b => hasArticulo(b, '169')).length;
-  const total170 = boletas.filter(b => hasArticulo(b, '170')).length;
-  const total171 = boletas.filter(b => hasArticulo(b, '171')).length;
-  const total165 = boletas.filter(b => hasArticulo(b, '165')).length;
-  const totalS165 = boletas.filter(b => hasArticulo(b, 'S_165')).length;
-
-  const coppCounts = [total167, total168, total169, total170, total171, total165, totalS165];
+  // Conteo de Artículos COPP para el QR global matemáticamente exacto con la tabla
+  const coppCounts = [sum167, sum168, sum169, sum170, sum171, sum165, sumS165];
   const qrUrl = encodeGlobalQRUrl(totalBoletas, totalDevueltas, parseFloat(efectividadGlobal), coppCounts, config);
 
   // Código QR de alta resolución (600px) con zona de seguridad (margin 3) y contraste puro para detección óptica instantánea
@@ -860,61 +1300,30 @@ export async function exportarOficioEstadisticasGlobalesPDF(
   // Matriz de Estadísticas por Artículos y Tribunales
   const tableHeaders = ['TRIBUNAL', '167', '168', '169', '170', '171', '165', 'S 165', 'TOTAL', 'PRACT.', '% EFECT.'];
 
-  const rows = tribunales.map(t => {
-    const courtBoletas = boletas.filter(b => b.tribunal.toUpperCase() === t.codigo.toUpperCase());
-    const c167 = courtBoletas.filter(b => hasArticulo(b, '167')).length;
-    const c168 = courtBoletas.filter(b => hasArticulo(b, '168')).length;
-    const c169 = courtBoletas.filter(b => hasArticulo(b, '169')).length;
-    const c170 = courtBoletas.filter(b => hasArticulo(b, '170')).length;
-    const c171 = courtBoletas.filter(b => hasArticulo(b, '171')).length;
-    const c165 = courtBoletas.filter(b => hasArticulo(b, '165')).length;
-    const cS165 = courtBoletas.filter(b => hasArticulo(b, 'S_165')).length;
-    const total = courtBoletas.length;
-    const devueltas = courtBoletas.filter(b => b.devueltaAlTribunal).length;
-    const pct = total > 0 ? `${Math.round((devueltas / total) * 100)}%` : '0%';
+  const pctGlobal = sumTotal > 0 ? `${Math.round((sumDevueltas / sumTotal) * 100)}%` : '100%';
 
-    return [
-      `${t.codigo} - ${t.nombre.length > 22 ? t.nombre.slice(0, 20) + '...' : t.nombre}`,
-      c167 || '-',
-      c168 || '-',
-      c169 || '-',
-      c170 || '-',
-      c171 || '-',
-      c165 || '-',
-      cS165 || '-',
-      total,
-      devueltas,
-      pct
-    ];
-  });
-
-  // Fila de Totales
-  const tot167 = boletas.filter(b => hasArticulo(b, '167')).length;
-  const tot168 = boletas.filter(b => hasArticulo(b, '168')).length;
-  const tot169 = boletas.filter(b => hasArticulo(b, '169')).length;
-  const tot170 = boletas.filter(b => hasArticulo(b, '170')).length;
-  const tot171 = boletas.filter(b => hasArticulo(b, '171')).length;
-  const tot165 = boletas.filter(b => hasArticulo(b, '165')).length;
-  const totS165 = boletas.filter(b => hasArticulo(b, 'S_165')).length;
-
-  rows.push([
-    'TOTAL GENERAL',
-    tot167,
-    tot168,
-    tot169,
-    tot170,
-    tot171,
-    tot165,
-    totS165,
-    totalBoletas,
-    totalDevueltas,
-    `${efectividadGlobal}%`
-  ]);
+  // Fila de Totales matemáticamente idéntica a la suma de cada columna
+  const tableBodyWithTotal = [
+    ...rows,
+    [
+      'TOTAL GENERAL',
+      sum167,
+      sum168,
+      sum169,
+      sum170,
+      sum171,
+      sum165,
+      sumS165,
+      sumTotal,
+      sumDevueltas,
+      pctGlobal
+    ]
+  ];
 
   autoTable(doc, {
     startY: 64,
     head: [tableHeaders],
-    body: rows,
+    body: tableBodyWithTotal,
     theme: 'grid',
     styles: {
       fontSize: 8,
@@ -989,7 +1398,7 @@ export async function exportarInformeMatrizTribunalPDF(
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
   const courtBoletas = (boletas || []).filter(b => matchesTribunal(b?.tribunal, tribunal.codigo));
@@ -1082,19 +1491,19 @@ export async function exportarInformeMatrizTribunalPDF(
   // Columnas de la Matriz Oficial
   const tableHeaders = ['CARÁCTER / SUJETO PROCESAL', '167', '168', '169', '170', '171', '165', 'S 165', 'TOTAL', 'PRACT.', '% EFECT.'];
 
-  // Categorías de Sujetos Procesales
+  // Categorías de Sujetos Procesales en el orden exacto solicitado
   const categoriasSujetos: { label: string; filter: (b: BoletaJudicial) => boolean }[] = [
-    {
-      label: 'DEFENSA (PÚBLICA / PRIVADA)',
-      filter: (b) => b.tipoCitado === 'ABOGADO_DEFENSA' || b.tipoCitado === 'DEFENSA_PUBLICA'
-    },
     {
       label: 'MINISTERIO PÚBLICO (FISCALÍAS)',
       filter: (b) => b.tipoCitado === 'FISCALIA'
     },
     {
+      label: 'DEFENSA (PÚBLICA / PRIVADA)',
+      filter: (b) => b.tipoCitado === 'ABOGADO_DEFENSA' || b.tipoCitado === 'DEFENSA_PUBLICA'
+    },
+    {
       label: 'IMPUTADOS / ACUSADOS / PENADOS',
-      filter: (b) => b.tipoCitado === 'IMPUTADO' || b.tipoCitado === 'ACUSADO' || b.tipoCitado === 'PENADO'
+      filter: (b) => b.tipoCitado === 'IMPUTADO' || b.tipoCitado === 'ACUSADO' || b.tipoCitado === 'PENADO' || b.tipoCitado === 'INVESTIGADO'
     },
     {
       label: 'VÍCTIMAS, QUERELLANTES Y DENUNC.',
@@ -1105,15 +1514,25 @@ export async function exportarInformeMatrizTribunalPDF(
       filter: (b) => b.tipoCitado === 'TESTIGO' || b.tipoCitado === 'EXPERTO'
     },
     {
-      label: 'CUERPOS POLICIALES / MILITARES',
-      filter: (b) => b.tipoCitado === 'ORGANO_POLICIAL'
+      label: 'FUNCIONARIOS / CUERPOS POLICIALES.',
+      filter: (b) => b.tipoCitado === 'ORGANO_POLICIAL' || b.tipoCitado === 'FUNCIONARIO'
     },
     {
-      label: 'OTROS (TERCEROS / FIADORES / REP.)',
-      filter: (b) => ['TERCERO', 'FIADOR', 'APODERADO', 'REPRESENTANTE_LEGAL', 'OTRO'].includes(b.tipoCitado) || 
-                     !['ABOGADO_DEFENSA', 'DEFENSA_PUBLICA', 'FISCALIA', 'IMPUTADO', 'ACUSADO', 'PENADO', 'VICTIMA', 'QUERELLANTE', 'DENUNCIANTE', 'TESTIGO', 'EXPERTO', 'ORGANO_POLICIAL'].includes(b.tipoCitado)
+      label: 'OTROS (TERCEROS / FIADORES / REP.).',
+      filter: (b) => ['TERCERO', 'FIADOR', 'APODERADO', 'REPRESENTANTE_LEGAL', 'SOLICITANTE', 'CIUDADANO', 'OTRO'].includes(b.tipoCitado) || 
+                     !['FISCALIA', 'ABOGADO_DEFENSA', 'DEFENSA_PUBLICA', 'IMPUTADO', 'ACUSADO', 'PENADO', 'INVESTIGADO', 'VICTIMA', 'QUERELLANTE', 'DENUNCIANTE', 'TESTIGO', 'EXPERTO', 'ORGANO_POLICIAL', 'FUNCIONARIO'].includes(b.tipoCitado)
     }
   ];
+
+  let sumSujetos167 = 0;
+  let sumSujetos168 = 0;
+  let sumSujetos169 = 0;
+  let sumSujetos170 = 0;
+  let sumSujetos171 = 0;
+  let sumSujetos165 = 0;
+  let sumSujetosS165 = 0;
+  let sumSujetosTot = 0;
+  let sumSujetosDev = 0;
 
   const rowsSujetos = categoriasSujetos.map(cat => {
     const sub = courtBoletas.filter(cat.filter);
@@ -1127,6 +1546,16 @@ export async function exportarInformeMatrizTribunalPDF(
     const tot = sub.length;
     const dev = sub.filter(b => b.devueltaAlTribunal).length;
     const pct = tot > 0 ? `${Math.round((dev / tot) * 100)}%` : '0%';
+
+    sumSujetos167 += c167;
+    sumSujetos168 += c168;
+    sumSujetos169 += c169;
+    sumSujetos170 += c170;
+    sumSujetos171 += c171;
+    sumSujetos165 += c165;
+    sumSujetosS165 += cS165;
+    sumSujetosTot += tot;
+    sumSujetosDev += dev;
 
     return [
       cat.label,
@@ -1143,19 +1572,21 @@ export async function exportarInformeMatrizTribunalPDF(
     ];
   });
 
-  // Fila Total de Sujetos
+  const pctSujetosGlobal = sumSujetosTot > 0 ? `${Math.round((sumSujetosDev / sumSujetosTot) * 100)}%` : '0%';
+
+  // Fila Total de Sujetos matemáticamente idéntica a la suma de cada columna
   rowsSujetos.push([
     'TOTAL GENERAL',
-    tot167 || 0,
-    tot168 || 0,
-    tot169 || 0,
-    tot170 || 0,
-    tot171 || 0,
-    tot165 || 0,
-    totS165 || 0,
-    total,
-    devueltas,
-    `${pctEfectividad}%`
+    sumSujetos167,
+    sumSujetos168,
+    sumSujetos169,
+    sumSujetos170,
+    sumSujetos171,
+    sumSujetos165,
+    sumSujetosS165,
+    sumSujetosTot,
+    sumSujetosDev,
+    pctSujetosGlobal
   ]);
 
   // Tabla 1: Desglose por Sujeto / Carácter Procesal
@@ -1248,9 +1679,9 @@ export function exportarReporteTribunalResultadosPDF(
   modoSalida: ModoSalidaDocumento = 'imprimir'
 ) {
   const doc = new jsPDF({
-    orientation: 'landscape',
+    orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
   const cleanCode = (tribunalCodigo || '').trim().toUpperCase();
@@ -1259,37 +1690,37 @@ export function exportarReporteTribunalResultadosPDF(
   );
   const boletasTribunal = boletasFiltradas.length > 0 ? boletasFiltradas : (boletas || []);
 
-  // Encabezado institucional
+  // Encabezado institucional (Hoja Oficio: 215.9mm ancho, centro: 107.95mm)
   doc.setFillColor(15, 23, 42); // slate-900
-  doc.rect(0, 0, 297, 18, 'F');
+  doc.rect(0, 0, 215.9, 18, 'F');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(255, 255, 255);
-  doc.text(config.entePrincipal, 148.5, 7, { align: 'center' });
+  doc.text(config.entePrincipal, 107.95, 7, { align: 'center' });
 
   doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
-  doc.text(config.circuitoJudicial, 148.5, 11, { align: 'center' });
-  doc.text(config.unidad, 148.5, 15, { align: 'center' });
+  doc.text(config.circuitoJudicial, 107.95, 11, { align: 'center' });
+  doc.text(config.unidad, 107.95, 15, { align: 'center' });
 
   // Subtítulo del Reporte por Tribunal
   doc.setFillColor(248, 250, 252);
-  doc.rect(14, 21, 269, 13, 'F');
+  doc.rect(8, 21, 199.9, 13, 'F');
   doc.setDrawColor(203, 213, 225);
-  doc.rect(14, 21, 269, 13, 'S');
+  doc.rect(8, 21, 199.9, 13, 'S');
 
-  doc.setFontSize(11);
+  doc.setFontSize(10.5);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
-  doc.text(`REPORTE DE BOLETAS Y RESULTADOS DE PRÁCTICA - ${tribunalCodigo.toUpperCase()}`, 18, 27);
+  doc.text(`REPORTE DE BOLETAS Y RESULTADOS DE PRÁCTICA - ${tribunalCodigo.toUpperCase()}`, 12, 27);
 
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(71, 85, 105);
   doc.text(
     `Despacho: ${tribunalNombre} | Total Boletas: ${boletasTribunal.length} | Fecha de Emisión: ${new Date().toLocaleDateString('es-ES')}`,
-    18,
+    12,
     31.5
   );
 
@@ -1389,26 +1820,27 @@ export function exportarReporteTribunalResultadosPDF(
       valign: 'middle',
       font: 'helvetica',
     },
+    rowPageBreak: 'avoid',
     headStyles: {
       fillColor: [15, 23, 42],
       textColor: [255, 255, 255],
       fontStyle: 'bold',
       halign: 'center',
     },
-    margin: { left: 14, right: 14, top: 37, bottom: 20 },
-    tableWidth: 269,
+    margin: { left: 8, right: 8, top: 37, bottom: 20 },
+    tableWidth: 199.9,
     columnStyles: {
-      0: { halign: 'center', cellWidth: 8 },
-      1: { halign: 'left', fontStyle: 'bold', cellWidth: 30 },
+      0: { halign: 'center', cellWidth: 6 },
+      1: { halign: 'left', fontStyle: 'bold', cellWidth: 26 },
       2: { halign: 'center', cellWidth: 14 },
-      3: { halign: 'left', cellWidth: 47 },
-      4: { halign: 'center', cellWidth: 20 },
-      5: { halign: 'center', cellWidth: 19 },
-      6: { halign: 'center', fontStyle: 'bold', cellWidth: 15 },
-      7: { halign: 'left', fontStyle: 'bold', cellWidth: 25 },
-      8: { halign: 'center', cellWidth: 31 },
-      9: { halign: 'left', cellWidth: 41 },
-      10: { halign: 'center', cellWidth: 19 },
+      3: { halign: 'left', cellWidth: 38 },
+      4: { halign: 'center', cellWidth: 16 },
+      5: { halign: 'center', cellWidth: 16 },
+      6: { halign: 'center', fontStyle: 'bold', cellWidth: 11 },
+      7: { halign: 'left', fontStyle: 'bold', cellWidth: 22 },
+      8: { halign: 'center', cellWidth: 22 },
+      9: { halign: 'left', cellWidth: 18 },
+      10: { halign: 'center', cellWidth: 10.9 },
     },
     alternateRowStyles: {
       fillColor: [248, 250, 252],
@@ -1481,54 +1913,54 @@ function renderTribunalSummaryAndSignatures(
     return b.devueltaAlTribunal || (b.estado === 'PRACTICADA' && tieneAlg && !!b.acuseRecibidoPor);
   }).length;
 
-  const count167 = boletas.filter(b => b.articuloCOPP === '167').length;
-  const count168 = boletas.filter(b => b.articuloCOPP === '168').length;
-  const count169 = boletas.filter(b => b.articuloCOPP === '169').length;
-  const count170 = boletas.filter(b => b.articuloCOPP === '170').length;
-  const count171 = boletas.filter(b => b.articuloCOPP === '171').length;
-  const count165 = boletas.filter(b => b.articuloCOPP === '165').length;
-  const countS165 = boletas.filter(b => b.articuloCOPP === 'S_165').length;
+  const count167 = boletas.filter(b => hasArticulo(b, '167')).length;
+  const count168 = boletas.filter(b => hasArticulo(b, '168')).length;
+  const count169 = boletas.filter(b => hasArticulo(b, '169')).length;
+  const count170 = boletas.filter(b => hasArticulo(b, '170')).length;
+  const count171 = boletas.filter(b => hasArticulo(b, '171')).length;
+  const count165 = boletas.filter(b => hasArticulo(b, '165')).length;
+  const countS165 = boletas.filter(b => hasArticulo(b, 'S_165')).length;
 
   // Box Resumen
   doc.setFillColor(241, 245, 249);
-  doc.roundedRect(14, startY, 130, 26, 2, 2, 'F');
+  doc.roundedRect(8, startY, 114, 26, 2, 2, 'F');
   doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(14, startY, 130, 26, 2, 2, 'S');
+  doc.roundedRect(8, startY, 114, 26, 2, 2, 'S');
 
   doc.setFontSize(8);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
-  doc.text(`TOTALES ${tribunalCodigo}:`, 18, startY + 5);
+  doc.text(`TOTALES ${tribunalCodigo}:`, 12, startY + 5);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.text(`Total Boletas: ${total}`, 18, startY + 10);
-  doc.text(`Practicadas Concluidas: ${practicadas}`, 18, startY + 15);
-  doc.text(`Devueltas a Secretaría: ${devueltas} (${total > 0 ? Math.round((devueltas/total)*100) : 0}%)`, 18, startY + 20);
+  doc.text(`Total Boletas: ${total}`, 12, startY + 10);
+  doc.text(`Practicadas Concluidas: ${practicadas}`, 12, startY + 15);
+  doc.text(`Devueltas a Secretaría: ${devueltas} (${total > 0 ? Math.round((devueltas/total)*100) : 0}%)`, 12, startY + 20);
 
-  doc.text(`Artículos COPP:`, 75, startY + 10);
-  doc.text(`167(${count167}) 168(${count168}) 169(${count169}) 170(${count170})`, 75, startY + 15);
-  doc.text(`171(${count171}) 165(${count165}) S 165(${countS165})`, 75, startY + 20);
+  doc.text(`Artículos COPP:`, 65, startY + 10);
+  doc.text(`167(${count167}) 168(${count168}) 169(${count169}) 170(${count170})`, 65, startY + 15);
+  doc.text(`171(${count171}) 165(${count165}) S 165(${countS165})`, 65, startY + 20);
 
   // Firmas
-  const firmaY = startY + 17;
+  const firmaY = startY + 16;
   doc.setDrawColor(100, 116, 139);
 
   // Alguacilazgo
-  doc.line(160, firmaY, 215, firmaY);
+  doc.line(128, firmaY, 166, firmaY);
   doc.setFontSize(7);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
-  doc.text('ALGUACILAZGO / PRÁCTICA', 187.5, firmaY + 3.5, { align: 'center' });
+  doc.text('ALGUACILAZGO / PRÁCTICA', 147, firmaY + 3.5, { align: 'center' });
   doc.setFont('helvetica', 'normal');
-  doc.text('Funcionario Responsable', 187.5, firmaY + 7, { align: 'center' });
+  doc.text('Funcionario Responsable', 147, firmaY + 7, { align: 'center' });
 
   // Secretaría del Tribunal
-  doc.line(230, firmaY, 285, firmaY);
+  doc.line(170, firmaY, 208, firmaY);
   doc.setFont('helvetica', 'bold');
-  doc.text(`SECRETARÍA ${tribunalCodigo}`, 257.5, firmaY + 3.5, { align: 'center' });
+  doc.text(`SECRETARÍA ${tribunalCodigo}`, 189, firmaY + 3.5, { align: 'center' });
   doc.setFont('helvetica', 'normal');
-  doc.text('Sello y Recibido en Autos', 257.5, firmaY + 7, { align: 'center' });
+  doc.text('Sello y Recibido en Autos', 189, firmaY + 7, { align: 'center' });
 }
 
 export function exportarHojaRutaAlguacilPDF(
@@ -1540,58 +1972,58 @@ export function exportarHojaRutaAlguacilPDF(
   opciones?: { esSobreseimiento?: boolean; tituloRuta?: string; modoSalida?: ModoSalidaDocumento }
 ) {
   const doc = new jsPDF({
-    orientation: 'landscape',
+    orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
   const fechaImpresion = fechaRuta || new Date().toISOString().slice(0, 10);
   const esSobreseimiento = opciones?.esSobreseimiento || (boletas || []).some(b => b?.seccionRuta === 'SOBRESEIMIENTO');
 
-  // Encabezado institucional
+  // Encabezado institucional (Hoja Oficio: 215.9mm ancho)
   doc.setFillColor(15, 23, 42); // slate-900
-  doc.rect(0, 0, 297, 18, 'F');
+  doc.rect(0, 0, 215.9, 18, 'F');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(255, 255, 255);
-  doc.text(config.entePrincipal, 148.5, 7, { align: 'center' });
+  doc.text(config.entePrincipal, 107.95, 7, { align: 'center' });
 
   doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
-  doc.text(config.circuitoJudicial, 148.5, 11, { align: 'center' });
-  doc.text(config.unidad, 148.5, 15, { align: 'center' });
+  doc.text(config.circuitoJudicial, 107.95, 11, { align: 'center' });
+  doc.text(config.unidad, 107.95, 15, { align: 'center' });
 
   // Cuadro superior con datos del Alguacil y Enrutamiento
   doc.setFillColor(248, 250, 252);
-  doc.rect(14, 22, 269, 15, 'F');
+  doc.rect(8, 22, 199.9, 15, 'F');
   doc.setDrawColor(203, 213, 225);
-  doc.rect(14, 22, 269, 15, 'S');
+  doc.rect(8, 22, 199.9, 15, 'S');
 
-  doc.setFontSize(11);
+  doc.setFontSize(10.5);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
   const tituloBox = esSobreseimiento 
-    ? 'HOJA DE RUTA / SOBRESEIMIENTO - LISTADO DE BOLETAS' 
-    : 'HOJA DE RUTA / LISTADO DE BOLETAS A PRACTICAR';
-  doc.text(tituloBox, 18, 28);
+    ? 'HOJA DE RUTA / SOBRESEIMIENTO - LISTADO DE BOLETAS (HOJA OFICIO)' 
+    : 'HOJA DE RUTA / LISTADO DE BOLETAS A PRACTICAR (HOJA OFICIO)';
+  doc.text(tituloBox, 12, 27.5);
 
-  doc.setFontSize(8.5);
+  doc.setFontSize(8);
   doc.setFont('helvetica', 'bold');
-  doc.text(`ALGUACIL ASIGNADO:`, 18, 33);
+  doc.text(`ALGUACIL ASIGNADO:`, 12, 33);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(30, 41, 59);
-  doc.text(alguacilNombre.toUpperCase(), 57, 33);
+  doc.text(alguacilNombre.toUpperCase(), 48, 33);
 
   doc.setFont('helvetica', 'bold');
-  doc.text(`FECHA DE ASIGNACIÓN / RUTA:`, 135, 33);
+  doc.text(`FECHA RUTA:`, 110, 33);
   doc.setFont('helvetica', 'normal');
-  doc.text(formatFechaDisplay(fechaImpresion), 190, 33);
+  doc.text(formatFechaDisplay(fechaImpresion), 133, 33);
 
   doc.setFont('helvetica', 'bold');
-  doc.text(`TOTAL BOLETAS:`, 225, 33);
+  doc.text(`TOTAL:`, 175, 33);
   doc.setFont('helvetica', 'normal');
-  doc.text(`${boletas.length} orden(es)`, 255, 33);
+  doc.text(`${boletas.length} orden(es)`, 188, 33);
 
   // Columnas para la tabla de práctica de boletas
   const tableHeaders = [
@@ -1601,7 +2033,7 @@ export function exportarHojaRutaAlguacilPDF(
     'TRIB.',
     'PERSONA A CITAR / NOTIFICAR',
     'DIRECCIÓN / SEDE',
-    esSobreseimiento ? 'NOTIFICACIÓN SOBRESEIMIENTO' : 'F. AUDIENCIA',
+    esSobreseimiento ? 'NOTIF. SOBRESEIMIENTO' : 'F. AUDIENCIA',
     'ART.',
     'RESULTADO / FIRMA DEL CITADO / DILIGENCIA',
   ];
@@ -1624,15 +2056,17 @@ export function exportarHojaRutaAlguacilPDF(
 
   autoTable(doc, {
     startY: 40,
+    margin: { left: 8, right: 8 },
     head: [tableHeaders],
     body: tableBody,
     theme: 'grid',
     styles: {
-      fontSize: 7.5,
-      cellPadding: 2,
+      fontSize: 7.2,
+      cellPadding: 1.5,
       valign: 'middle',
       font: 'helvetica',
     },
+    rowPageBreak: 'avoid',
     headStyles: {
       fillColor: [15, 23, 42],
       textColor: [255, 255, 255],
@@ -1640,15 +2074,15 @@ export function exportarHojaRutaAlguacilPDF(
       halign: 'center',
     },
     columnStyles: {
-      0: { halign: 'center', cellWidth: 8 },
-      1: { halign: 'left', fontStyle: 'bold', cellWidth: 32 },
-      2: { halign: 'center', cellWidth: 18 },
-      3: { halign: 'center', fontStyle: 'bold', cellWidth: 12 },
-      4: { halign: 'left', fontStyle: 'bold', cellWidth: 55 },
-      5: { halign: 'left', cellWidth: 50 },
-      6: { halign: 'center', cellWidth: 20 },
-      7: { halign: 'center', fontStyle: 'bold', cellWidth: 12 },
-      8: { halign: 'left', cellWidth: 62 },
+      0: { halign: 'center', cellWidth: 6 },
+      1: { halign: 'left', fontStyle: 'bold', cellWidth: 26 },
+      2: { halign: 'center', cellWidth: 15 },
+      3: { halign: 'center', fontStyle: 'bold', cellWidth: 9 },
+      4: { halign: 'left', fontStyle: 'bold', cellWidth: 38 },
+      5: { halign: 'left', cellWidth: 35 },
+      6: { halign: 'center', cellWidth: 18 },
+      7: { halign: 'center', fontStyle: 'bold', cellWidth: 9 },
+      8: { halign: 'left', cellWidth: 43.9 },
     },
     alternateRowStyles: {
       fillColor: [248, 250, 252],
@@ -1660,7 +2094,7 @@ export function exportarHojaRutaAlguacilPDF(
 
   // Si no cabe en la misma página, agregar una nueva
   if (finalY > pageHeight - 35) {
-    doc.addPage();
+    doc.addPage('legal', 'portrait');
     renderAlguacilSignatures(doc, config, alguacilNombre, 15);
   } else {
     renderAlguacilSignatures(doc, config, alguacilNombre, finalY);
@@ -1670,7 +2104,87 @@ export function exportarHojaRutaAlguacilPDF(
     ? `Hoja_Ruta_Sobreseimiento_${alguacilNombre.replace(/\s+/g, '_')}_${fechaImpresion}.pdf`
     : `Hoja_Ruta_Alguacil_${alguacilNombre.replace(/\s+/g, '_')}_${fechaImpresion}.pdf`;
   const modo = opciones?.modoSalida || 'imprimir';
-  procesarSalidaPDF(doc, fileName, modo, `Hoja de Ruta - ${alguacilNombre}`);
+  const htmlPrint = generarHtmlHojaRutaAlguacil(alguacilNombre, boletas, config, fechaImpresion, esSobreseimiento);
+  procesarSalidaPDF(doc, fileName, modo, `Hoja de Ruta - ${alguacilNombre} (Hoja Oficio)`, htmlPrint);
+}
+
+/**
+ * Genera el documento HTML correspondiente a la Hoja de Ruta de Alguacil en formato oficial Hoja Tipo Oficio Vertical
+ */
+export function generarHtmlHojaRutaAlguacil(
+  alguacilNombre: string,
+  boletas: BoletaJudicial[],
+  config: ConfiguracionDespacho,
+  fechaRuta?: string,
+  esSobreseimiento?: boolean
+): string {
+  const fechaImpresion = fechaRuta || new Date().toISOString().slice(0, 10);
+  const rows = boletas.map((b, idx) => {
+    const audTexto = (esSobreseimiento || b.seccionRuta === 'SOBRESEIMIENTO')
+      ? 'NOTIFICACIÓN SOBRESEIMIENTO'
+      : (b.esSoloNotificacion ? 'SOLO NOTIF.' : formatFechaDisplay(b.fechaAudiencia));
+    return `
+      <tr style="height: 22px; font-size: 8px; ${idx % 2 === 1 ? 'background-color: #f8fafc;' : ''}">
+        <td style="text-align: center; font-weight: bold; width: 22px; border: 1px solid #cbd5e1;">${idx + 1}</td>
+        <td style="font-weight: bold; padding: 2px 4px; border: 1px solid #cbd5e1;">${b.numeroCausa}</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1;">${b.boletaNumero || 'S/N'}</td>
+        <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${b.tribunal}</td>
+        <td style="padding: 2px 4px; border: 1px solid #cbd5e1; font-weight: 500;">${b.notificadoCitado}</td>
+        <td style="padding: 2px 4px; border: 1px solid #cbd5e1; font-size: 7.5px;">${b.direccionCitacion || 'Sede / Domicilio en autos'}</td>
+        <td style="text-align: center; border: 1px solid #cbd5e1; font-size: 7.5px;">${audTexto}</td>
+        <td style="text-align: center; font-weight: bold; border: 1px solid #cbd5e1;">${b.articuloCOPP || '-'}</td>
+        <td style="padding: 2px 4px; border: 1px solid #cbd5e1; font-size: 7.5px;">${b.observaciones || '[  ] Positiva   [  ] Negativa   Firma: _______________'}</td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <div class="hoja-pagina-oficio" style="width: 100%; box-sizing: border-box; padding: 0 0 10px 0; font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif;">
+      <div style="background-color: #0f172a; color: #ffffff; text-align: center; padding: 6px 10px; margin-bottom: 8px; border-radius: 4px;">
+        <div style="font-size: 10.5px; font-weight: bold; letter-spacing: 0.5px;">${config.entePrincipal}</div>
+        <div style="font-size: 9px;">${config.circuitoJudicial}</div>
+        <div style="font-size: 8.5px; opacity: 0.9;">${config.unidad}</div>
+      </div>
+      <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 6px 10px; margin-bottom: 8px;">
+        <div style="font-size: 10.5px; font-weight: bold; color: #0f172a;">
+          ${esSobreseimiento ? 'HOJA DE RUTA / SOBRESEIMIENTO - LISTADO DE BOLETAS (HOJA OFICIO)' : 'HOJA DE RUTA / LISTADO DE BOLETAS A PRACTICAR (HOJA OFICIO)'}
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 8.5px; margin-top: 4px; color: #334155;">
+          <span><strong>ALGUACIL ASIGNADO:</strong> ${alguacilNombre.toUpperCase()}</span>
+          <span><strong>FECHA RUTA:</strong> ${formatFechaDisplay(fechaImpresion)}</span>
+          <span><strong>TOTAL:</strong> ${boletas.length} orden(es)</span>
+        </div>
+      </div>
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid #94a3b8;">
+        <thead>
+          <tr style="background-color: #1e293b; color: #ffffff; font-size: 7.5px; height: 24px;">
+            <th style="border: 1px solid #64748b; width: 22px;">Nº</th>
+            <th style="border: 1px solid #64748b; width: 85px; text-align: left; padding-left: 4px;">Nº DE CAUSA</th>
+            <th style="border: 1px solid #64748b; width: 50px;">BOLETA Nº</th>
+            <th style="border: 1px solid #64748b; width: 35px;">TRIB.</th>
+            <th style="border: 1px solid #64748b; width: 130px;">PERSONA A CITAR / NOTIFICAR</th>
+            <th style="border: 1px solid #64748b; width: 130px;">DIRECCIÓN / SEDE</th>
+            <th style="border: 1px solid #64748b; width: 75px;">${esSobreseimiento ? 'NOTIF. SOBRESEIMIENTO' : 'F. AUDIENCIA'}</th>
+            <th style="border: 1px solid #64748b; width: 35px;">ART.</th>
+            <th style="border: 1px solid #64748b;">RESULTADO / FIRMA DEL CITADO / DILIGENCIA</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+      <div style="display: flex; justify-content: space-between; margin-top: 14px; padding: 0 10px;">
+        <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 8px; width: 46%; text-align: center;">
+          <div style="font-size: 8px; font-weight: bold; color: #0f172a; margin-bottom: 22px;">ENTREGADO POR (ALGUACIL DISTRIBUIDOR):</div>
+          <div style="border-top: 1px solid #475569; padding-top: 4px; font-size: 7px; color: #64748b;">Firma y Sello de Salida / Distribución</div>
+        </div>
+        <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 8px; width: 46%; text-align: center;">
+          <div style="font-size: 8px; font-weight: bold; color: #0f172a; margin-bottom: 22px;">RECIBIDO CONFORME (ALGUACIL):</div>
+          <div style="border-top: 1px solid #475569; padding-top: 4px; font-size: 7px; color: #64748b;">Alguacil: ${alguacilNombre.toUpperCase()}</div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderAlguacilSignatures(
@@ -1679,38 +2193,38 @@ function renderAlguacilSignatures(
   alguacilNombre: string,
   startY: number
 ) {
-  const boxWidth = 125;
+  const boxWidth = 96;
   const boxHeight = 24;
 
   // Firma 1: Alguacil Distribuidor / Encargado
   doc.setDrawColor(203, 213, 225);
   doc.setFillColor(248, 250, 252);
-  doc.rect(14, startY, boxWidth, boxHeight, 'F');
-  doc.rect(14, startY, boxWidth, boxHeight, 'S');
+  doc.rect(8, startY, boxWidth, boxHeight, 'F');
+  doc.rect(8, startY, boxWidth, boxHeight, 'S');
 
-  doc.setFontSize(8);
+  doc.setFontSize(7.5);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
-  doc.text('ENTREGADO POR (ALGUACIL DISTRIBUIDOR / ENCARGADO):', 18, startY + 5);
+  doc.text('ENTREGADO POR (ALGUACIL DISTRIBUIDOR):', 12, startY + 5);
   
   doc.setDrawColor(100, 116, 139);
-  doc.line(25, startY + 16, 120, startY + 16);
-  doc.setFontSize(7.5);
+  doc.line(16, startY + 16, 96, startY + 16);
+  doc.setFontSize(7);
   doc.setFont('helvetica', 'normal');
-  doc.text('Firma y Sello de Salida / Distribución', 72.5, startY + 20, { align: 'center' });
+  doc.text('Firma y Sello de Salida / Distribución', 56, startY + 20, { align: 'center' });
 
   // Firma 2: Alguacil que Practica / Recibe
-  doc.rect(158, startY, boxWidth, boxHeight, 'F');
-  doc.rect(158, startY, boxWidth, boxHeight, 'S');
+  doc.rect(111, startY, boxWidth, boxHeight, 'F');
+  doc.rect(111, startY, boxWidth, boxHeight, 'S');
 
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`RECIBIDO CONFORME (ALGUACIL QUE PRACTICA):`, 162, startY + 5);
-
-  doc.line(170, startY + 16, 265, startY + 16);
   doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`RECIBIDO CONFORME (ALGUACIL):`, 115, startY + 5);
+
+  doc.line(119, startY + 16, 199, startY + 16);
+  doc.setFontSize(7);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Alguacil: ${alguacilNombre.toUpperCase()} - Firma y C.I.`, 217.5, startY + 20, { align: 'center' });
+  doc.text(`Alguacil: ${alguacilNombre.toUpperCase()}`, 159, startY + 20, { align: 'center' });
 }
 
 export interface AsignacionAlguacilRuta {
@@ -1734,9 +2248,9 @@ export function exportarHojaRutaCompartidaMultiplesAlguacilesPDF(
   }
 
   const doc = new jsPDF({
-    orientation: 'landscape',
+    orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
   const fechaImpresion = fechaRuta || new Date().toISOString().slice(0, 10);
@@ -1751,30 +2265,30 @@ export function exportarHojaRutaCompartidaMultiplesAlguacilesPDF(
     const boletasSub = asig.boletas;
 
     if (!isFirstPage) {
-      doc.addPage();
+      doc.addPage('legal', 'portrait');
     }
 
     // Encabezado institucional azul profundo
     doc.setFillColor(11, 30, 59); // institucional #0B1E3B
-    doc.rect(0, 0, 297, 18, 'F');
+    doc.rect(0, 0, 215.9, 18, 'F');
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
     doc.setTextColor(255, 255, 255);
-    doc.text(config.entePrincipal, 148.5, 7, { align: 'center' });
+    doc.text(config.entePrincipal, 107.95, 7, { align: 'center' });
 
     doc.setFontSize(8.5);
     doc.setFont('helvetica', 'normal');
-    doc.text(config.circuitoJudicial, 148.5, 11, { align: 'center' });
-    doc.text(config.unidad, 148.5, 15, { align: 'center' });
+    doc.text(config.circuitoJudicial, 107.95, 11, { align: 'center' });
+    doc.text(config.unidad, 107.95, 15, { align: 'center' });
 
     // Cuadro superior con datos del Alguacil y Enrutamiento Compartido
     doc.setFillColor(248, 250, 252);
-    doc.rect(14, 22, 269, 16, 'F');
+    doc.rect(8, 22, 199.9, 16, 'F');
     doc.setDrawColor(203, 213, 225);
-    doc.rect(14, 22, 269, 16, 'S');
+    doc.rect(8, 22, 199.9, 16, 'S');
 
-    doc.setFontSize(10.5);
+    doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(15, 23, 42);
     const tituloBox = esSobreseimiento
@@ -1782,24 +2296,24 @@ export function exportarHojaRutaCompartidaMultiplesAlguacilesPDF(
       : (opciones?.tituloRuta 
           ? `${opciones.tituloRuta.toUpperCase()} (PARTE ${parteNum} DE ${totalPartes})` 
           : `HOJA DE RUTA COMPARTIDA (PARTE ${parteNum} DE ${totalPartes}) - RUTA NOTIFICACIÓN Y CITACIÓN`);
-    doc.text(tituloBox, 18, 28);
+    doc.text(tituloBox, 12, 28);
 
-    doc.setFontSize(8.5);
+    doc.setFontSize(8);
     doc.setFont('helvetica', 'bold');
-    doc.text(`ALGUACIL ASIGNADO:`, 18, 34);
+    doc.text(`ALGUACIL ASIGNADO:`, 12, 34);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(30, 41, 59);
-    doc.text(alguacilNombre.toUpperCase(), 57, 34);
+    doc.text(alguacilNombre.toUpperCase(), 48, 34);
 
     doc.setFont('helvetica', 'bold');
-    doc.text(`FECHA ASIGNACIÓN:`, 135, 34);
+    doc.text(`FECHA ASIGNACIÓN:`, 105, 34);
     doc.setFont('helvetica', 'normal');
-    doc.text(formatFechaDisplay(fechaImpresion), 173, 34);
+    doc.text(formatFechaDisplay(fechaImpresion), 140, 34);
 
     doc.setFont('helvetica', 'bold');
-    doc.text(`BOLETAS ASIGNADAS:`, 210, 34);
+    doc.text(`BOLETAS:`, 172, 34);
     doc.setFont('helvetica', 'normal');
-    doc.text(`${boletasSub.length} boleta(s)`, 248, 34);
+    doc.text(`${boletasSub.length}`, 190, 34);
 
     // Columnas para la tabla
     const tableHeaders = [
@@ -1809,7 +2323,7 @@ export function exportarHojaRutaCompartidaMultiplesAlguacilesPDF(
       'TRIB.',
       'PERSONA A CITAR / NOTIFICAR',
       'DIRECCIÓN / SEDE',
-      esSobreseimiento ? 'NOTIFICACIÓN SOBRESEIMIENTO' : 'F. AUDIENCIA',
+      esSobreseimiento ? 'NOTIF. SOBRESEIMIENTO' : 'F. AUDIENCIA',
       'ART.',
       'RESULTADO / FIRMA DEL CITADO / DILIGENCIA',
     ];
@@ -1832,15 +2346,17 @@ export function exportarHojaRutaCompartidaMultiplesAlguacilesPDF(
 
     autoTable(doc, {
       startY: 41,
+      margin: { left: 8, right: 8 },
       head: [tableHeaders],
       body: tableBody,
       theme: 'grid',
       styles: {
-        fontSize: 7.5,
-        cellPadding: 2,
+        fontSize: 7.2,
+        cellPadding: 1.5,
         valign: 'middle',
         font: 'helvetica',
       },
+      rowPageBreak: 'avoid',
       headStyles: {
         fillColor: [11, 30, 59],
         textColor: [255, 255, 255],
@@ -1848,15 +2364,15 @@ export function exportarHojaRutaCompartidaMultiplesAlguacilesPDF(
         halign: 'center',
       },
       columnStyles: {
-        0: { halign: 'center', cellWidth: 8 },
-        1: { halign: 'left', fontStyle: 'bold', cellWidth: 32 },
-        2: { halign: 'center', cellWidth: 18 },
-        3: { halign: 'center', fontStyle: 'bold', cellWidth: 12 },
-        4: { halign: 'left', fontStyle: 'bold', cellWidth: 55 },
-        5: { halign: 'left', cellWidth: 50 },
-        6: { halign: 'center', cellWidth: 20 },
-        7: { halign: 'center', fontStyle: 'bold', cellWidth: 12 },
-        8: { halign: 'left', cellWidth: 62 },
+        0: { halign: 'center', cellWidth: 6 },
+        1: { halign: 'left', fontStyle: 'bold', cellWidth: 26 },
+        2: { halign: 'center', cellWidth: 15 },
+        3: { halign: 'center', fontStyle: 'bold', cellWidth: 9 },
+        4: { halign: 'left', fontStyle: 'bold', cellWidth: 38 },
+        5: { halign: 'left', cellWidth: 35 },
+        6: { halign: 'center', cellWidth: 18 },
+        7: { halign: 'center', fontStyle: 'bold', cellWidth: 9 },
+        8: { halign: 'left', cellWidth: 43.9 },
       },
       alternateRowStyles: {
         fillColor: [248, 250, 252],
@@ -1867,7 +2383,7 @@ export function exportarHojaRutaCompartidaMultiplesAlguacilesPDF(
     const pageHeight = doc.internal.pageSize.height;
 
     if (finalY > pageHeight - 35) {
-      doc.addPage();
+      doc.addPage('legal', 'portrait');
       renderAlguacilSignatures(doc, config, alguacilNombre, 15);
     } else {
       renderAlguacilSignatures(doc, config, alguacilNombre, finalY);
@@ -1879,7 +2395,7 @@ export function exportarHojaRutaCompartidaMultiplesAlguacilesPDF(
     ? `Ruta_Sobreseimiento_Compartida_${nombresLimpios}_${fechaImpresion}.pdf`
     : `Ruta_Compartida_${nombresLimpios}_${fechaImpresion}.pdf`;
   const modo = opciones?.modoSalida || 'imprimir';
-  procesarSalidaPDF(doc, fileName, modo, `Hoja de Ruta Compartida (${asignaciones.length} Alguaciles)`);
+  procesarSalidaPDF(doc, fileName, modo, `Hoja de Ruta Compartida (${asignaciones.length} Alguaciles) - Hoja Oficio`);
 }
 
 /**
@@ -1924,15 +2440,15 @@ export function exportarBoletasSeleccionadasPDF(
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
-  const pageWidth = doc.internal.pageSize.width; // 210mm
-  const pageHeight = doc.internal.pageSize.height; // 297mm
+  const pageWidth = doc.internal.pageSize.width; // 215.9mm
+  const pageHeight = doc.internal.pageSize.height; // 355.6mm
 
   boletas.forEach((b, idx) => {
     if (idx > 0) {
-      doc.addPage('a4', 'portrait');
+      doc.addPage('legal', 'portrait');
     }
 
     // 1. Franja superior institucional Azul Marino Oficial
@@ -2273,11 +2789,11 @@ export function exportarFormatoResultaFisicoPDF(opciones: OpcionesResultaFisico)
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
-  const pageWidth = doc.internal.pageSize.width; // 210mm
-  const pageHeight = doc.internal.pageSize.height; // 297mm
+  const pageWidth = doc.internal.pageSize.width; // 215.9mm
+  const pageHeight = doc.internal.pageSize.height; // 355.6mm
 
   // 1. Franja institucional superior
   doc.setFillColor(11, 30, 59); // Navy Blue
@@ -2533,9 +3049,9 @@ export function exportarAcusesUnificadosMeridaPDF(
   modoSalida: ModoSalidaDocumento = 'imprimir'
 ) {
   const doc = new jsPDF({
-    orientation: 'landscape',
+    orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
   const boletasMerida = (boletas || []).filter(b => b.seccionRuta === 'OTROS_ESTADOS_MERIDA');
@@ -2543,36 +3059,36 @@ export function exportarAcusesUnificadosMeridaPDF(
 
   // Encabezado institucional
   doc.setFillColor(15, 23, 42); // slate-900
-  doc.rect(0, 0, 297, 18, 'F');
+  doc.rect(0, 0, 215.9, 18, 'F');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(255, 255, 255);
-  doc.text((config.entePrincipal || 'REPÚBLICA BOLIVARIANA DE VENEZUELA • PODER JUDICIAL').toUpperCase(), 148.5, 6.5, { align: 'center' });
+  doc.text((config.entePrincipal || 'REPÚBLICA BOLIVARIANA DE VENEZUELA • PODER JUDICIAL').toUpperCase(), 107.95, 6.5, { align: 'center' });
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(203, 213, 225);
-  doc.text((config.circuitoJudicial || 'CIRCUITO JUDICIAL PENAL EXTENSIÓN EL VIGÍA ESTADO MÉRIDA').toUpperCase(), 148.5, 11, { align: 'center' });
+  doc.text((config.circuitoJudicial || 'CIRCUITO JUDICIAL PENAL EXTENSIÓN EL VIGÍA ESTADO MÉRIDA').toUpperCase(), 107.95, 11, { align: 'center' });
 
   doc.setFontSize(6.5);
   doc.setTextColor(148, 163, 184);
-  doc.text((config.unidad || 'UNIDAD DE ACTOS Y COMUNICACIÓN (ALGUACILAZGO)').toUpperCase(), 148.5, 15, { align: 'center' });
+  doc.text((config.unidad || 'UNIDAD DE ACTOS Y COMUNICACIÓN (ALGUACILAZGO)').toUpperCase(), 107.95, 15, { align: 'center' });
 
   // Título del documento
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11.5);
+  doc.setFontSize(10.5);
   doc.setTextColor(15, 23, 42);
-  doc.text('RELACIÓN UNIFICADA DE ACUSES Y RESULTAS DE BOLETAS - MÉRIDA Y OTROS TRIBUNALES', 14, 25);
+  doc.text('RELACIÓN UNIFICADA DE ACUSES Y RESULTAS DE BOLETAS', 8, 24);
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
+  doc.setFontSize(7.5);
   doc.setTextColor(71, 85, 105);
-  doc.text(`Listado consolidado de causas foráneas y de la ciudad de Mérida • Período / Ruta: ${config.mesRutaActual.toUpperCase()} • Total: ${boletasAProcesar.length} Boletas`, 14, 30);
+  doc.text(`Listado consolidado de causas foráneas y de la ciudad de Mérida • Período / Ruta: ${config.mesRutaActual.toUpperCase()} • Total: ${boletasAProcesar.length} Boletas`, 8, 29);
 
   // Línea divisoria
   doc.setDrawColor(203, 213, 225);
-  doc.line(14, 32, 283, 32);
+  doc.line(8, 31, 207.9, 31);
 
   // Preparar datos de la tabla unificada
   const tableRows = boletasAProcesar.map((b, idx) => {
@@ -2640,24 +3156,27 @@ export function exportarAcusesUnificadosMeridaPDF(
       lineWidth: 0.15,
       valign: 'middle',
     },
+    rowPageBreak: 'avoid',
     headStyles: {
       fillColor: [15, 23, 42],
       textColor: [255, 255, 255],
       fontStyle: 'bold',
       halign: 'center',
     },
+    margin: { left: 8, right: 8 },
+    tableWidth: 199.9,
     columnStyles: {
-      0: { cellWidth: 8, halign: 'center', fontStyle: 'bold' },
-      1: { cellWidth: 32, fontStyle: 'bold' },
-      2: { cellWidth: 30, halign: 'center' },
-      3: { cellWidth: 16, halign: 'center' },
-      4: { cellWidth: 44 },
-      5: { cellWidth: 20, halign: 'center' },
-      6: { cellWidth: 16, halign: 'center', fontStyle: 'bold' },
-      7: { cellWidth: 24 },
-      8: { cellWidth: 20, halign: 'center', fontStyle: 'bold' },
-      9: { cellWidth: 40 },
-      10: { cellWidth: 19, halign: 'center', fontStyle: 'bold' },
+      0: { cellWidth: 6, halign: 'center', fontStyle: 'bold' },
+      1: { cellWidth: 26, fontStyle: 'bold' },
+      2: { cellWidth: 24, halign: 'center' },
+      3: { cellWidth: 14, halign: 'center' },
+      4: { cellWidth: 38 },
+      5: { cellWidth: 16, halign: 'center' },
+      6: { cellWidth: 11, halign: 'center', fontStyle: 'bold' },
+      7: { cellWidth: 20 },
+      8: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+      9: { cellWidth: 16 },
+      10: { cellWidth: 10.9, halign: 'center', fontStyle: 'bold' },
     },
     didDrawCell: (data) => {
       if (data.section === 'body') {
@@ -2681,42 +3200,32 @@ export function exportarAcusesUnificadosMeridaPDF(
 
   const finalY = (doc.lastAutoTable?.finalY || 140) + 12;
 
-  if (finalY > 165) {
-    doc.addPage();
+  if (finalY > 300) {
+    doc.addPage('legal', 'portrait');
     doc.setPage(doc.getNumberOfPages());
   }
 
-  const signY = finalY > 165 ? 20 : finalY;
+  const signY = finalY > 300 ? 20 : finalY;
 
-  // Cuadro de Firmas de Entrega y Recepción Unificada
-  doc.rect(14, signY, 86, 32);
+  // Cuadro de Firmas de Entrega y Recepción Unificada (Hoja Oficio)
+  doc.rect(8, signY, 96, 32);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
   doc.setTextColor(15, 23, 42);
-  doc.text('REMITIDO POR (ALGUACILAZGO / UAC):', 16, signY + 5.5);
+  doc.text('REMITIDO POR (ALGUACILAZGO / UAC):', 11, signY + 5.5);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.8);
-  doc.text(`Encargado: ${config.jefeAlguacilazgo || 'Coordinación de Alguacilazgo'}`, 16, signY + 12);
-  doc.text('Firma y Sello: ____________________________________', 16, signY + 24);
+  doc.text(`Encargado: ${config.jefeAlguacilazgo || 'Coordinación de Alguacilazgo'}`, 11, signY + 12);
+  doc.text('Firma y Sello: ___________________________', 11, signY + 24);
 
-  doc.rect(105, signY, 86, 32);
+  doc.rect(111.9, signY, 96, 32);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
-  doc.text('ALGUACIL RESPONSABLE DE LA DILIGENCIA:', 107, signY + 5.5);
+  doc.text('RECIBIDO EN SEDE / ENLACE FORÁNEO:', 114, signY + 5.5);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.8);
-  doc.text(`Comisión: ${config.alguacilesRuta || 'Alguaciles Asignados'}`, 107, signY + 12);
-  doc.text('Firma: ___________________________________________', 107, signY + 24);
-
-  doc.rect(196, signY, 87, 32);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
-  doc.text('RECIBIDO EN SEDE / CORREO / ENLACE FORÁNEO:', 198, signY + 5.5);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.8);
-  doc.text('Receptor / Dependencia: _____________________________', 198, signY + 12);
-  doc.text('Fecha: ____/____/________   Hora: _________________', 198, signY + 18);
-  doc.text('Firma y Sello de Recibido: ___________________________', 198, signY + 25);
+  doc.text('Receptor: ________________________________', 114, signY + 12);
+  doc.text('Firma y Sello: ___________________________', 114, signY + 24);
 
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
@@ -2726,8 +3235,8 @@ export function exportarAcusesUnificadosMeridaPDF(
     doc.setTextColor(100, 116, 139);
     doc.text(
       `Página ${i} de ${pageCount} • UNIDAD DE ACTOS Y COMUNICACIÓN • RELACIÓN UNIFICADA DE MÉRIDA Y OTROS ESTADOS • ${new Date().toLocaleDateString('es-VE')}`,
-      148.5,
-      203,
+      107.95,
+      350,
       { align: 'center' }
     );
   }
@@ -2748,7 +3257,7 @@ export function exportarEstadisticasMeridaPDF(
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
   const boletasMerida = (boletas || []).filter(b => b.seccionRuta === 'OTROS_ESTADOS_MERIDA');
@@ -2956,8 +3465,169 @@ export function exportarEstadisticasMeridaPDF(
 }
 
 /**
- * Guarda e imprime la Relación Periódica oficial de boletas (por Día, Semana o Mes)
- * Formato apaisado (landscape) con membrete oficial, casillas de firma y tabla ejecutiva.
+ * Genera el documento HTML del Reporte Estadístico Periódico (Día, Semana o Mes)
+ * Formato 100% estadístico con KPIs, matrices de tribunales, artículos del COPP y firmas.
+ */
+export function generarHtmlRelacionPeriodica(
+  boletas: BoletaJudicial[],
+  config: ConfiguracionDespacho,
+  tipoPeriodo: 'DIA' | 'SEMANA' | 'MES',
+  etiquetaPeriodo: string
+): string {
+  const total = boletas.length;
+  const devueltas = boletas.filter(b => b.devueltaAlTribunal).length;
+  const enRuta = total - devueltas;
+  const pct = total > 0 ? Math.round((devueltas / total) * 100) : 0;
+
+  // Tribunales
+  const tribunalesCodigos = ['C1', 'C2', 'C3', 'J1', 'J2', 'J3', 'E1', 'E2', 'TPM1', 'TPM2', 'SPA 1', 'OTRO'];
+  const tribStats = tribunalesCodigos.map(tri => {
+    const bols = boletas.filter(b => {
+      const t = (b.tribunal || '').toUpperCase().trim();
+      if (tri === 'OTRO') return t === 'OTRO' || !tribunalesCodigos.slice(0, 11).includes(t);
+      return t === tri;
+    });
+    const dev = bols.filter(b => b.devueltaAlTribunal).length;
+    return {
+      codigo: tri,
+      total: bols.length,
+      devueltas: dev,
+      pendientes: bols.length - dev,
+      efectividad: bols.length > 0 ? Math.round((dev / bols.length) * 100) : 0
+    };
+  }).filter(t => t.total > 0);
+
+  // Artículos COPP
+  let a167 = 0, a168 = 0, a169 = 0, a170 = 0, a171 = 0, a165 = 0, aS165 = 0;
+  boletas.forEach(b => {
+    if (hasArticulo(b, '167')) a167++;
+    if (hasArticulo(b, '168')) a168++;
+    if (hasArticulo(b, '169')) a169++;
+    if (hasArticulo(b, '170')) a170++;
+    if (hasArticulo(b, '171')) a171++;
+    if (hasArticulo(b, '165')) a165++;
+    if (hasArticulo(b, 'S_165')) aS165++;
+  });
+  const totalArts = a167 + a168 + a169 + a170 + a171 + a165 + aS165;
+
+  return `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif; padding: 15px; color: #0f172a;">
+      <div style="background-color: #0f172a; color: #ffffff; text-align: center; padding: 10px; border-radius: 6px; margin-bottom: 12px;">
+        <div style="font-size: 11px; font-weight: bold;">${config.entePrincipal}</div>
+        <div style="font-size: 9.5px;">${config.circuitoJudicial}</div>
+        <div style="font-size: 9px; opacity: 0.9;">${config.unidad}</div>
+      </div>
+
+      <div style="margin-bottom: 12px; border-bottom: 2px solid #0f172a; padding-bottom: 6px;">
+        <h2 style="font-size: 13px; font-weight: bold; margin: 0; color: #0f172a; text-transform: uppercase;">
+          REPORTE ESTADÍSTICO JUDICIAL - CONTROL PERIÓDICO (${tipoPeriodo}: ${etiquetaPeriodo.toUpperCase()})
+        </h2>
+        <div style="font-size: 9px; color: #475569; margin-top: 3px;">
+          Rendición de Cuentas, Totales, Efectividad y Artículos del COPP (Sin listado individual de boletas) • Emisión: ${new Date().toLocaleDateString('es-VE')}
+        </div>
+      </div>
+
+      <!-- Tarjetas KPIs -->
+      <div style="display: flex; gap: 8px; margin-bottom: 14px;">
+        <div style="flex: 1; background-color: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px; text-align: center;">
+          <div style="font-size: 8px; font-weight: bold; color: #475569; text-transform: uppercase;">Total Asignadas</div>
+          <div style="font-size: 16px; font-weight: bold; color: #0f172a;">${total}</div>
+        </div>
+        <div style="flex: 1; background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; padding: 8px; text-align: center;">
+          <div style="font-size: 8px; font-weight: bold; color: #047857; text-transform: uppercase;">Practicadas / Devueltas</div>
+          <div style="font-size: 16px; font-weight: bold; color: #065f46;">${devueltas}</div>
+        </div>
+        <div style="flex: 1; background-color: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 8px; text-align: center;">
+          <div style="font-size: 8px; font-weight: bold; color: #b45309; text-transform: uppercase;">En Ruta / Pendientes</div>
+          <div style="font-size: 16px; font-weight: bold; color: #92400e;">${enRuta}</div>
+        </div>
+        <div style="flex: 1; background-color: #eef2ff; border: 1px solid #c7d2fe; border-radius: 6px; padding: 8px; text-align: center;">
+          <div style="font-size: 8px; font-weight: bold; color: #4338ca; text-transform: uppercase;">Efectividad</div>
+          <div style="font-size: 16px; font-weight: bold; color: #3730a3;">${pct}%</div>
+        </div>
+      </div>
+
+      <!-- Matriz por Tribunales -->
+      <div style="margin-bottom: 14px;">
+        <div style="font-size: 10px; font-weight: bold; margin-bottom: 4px; color: #1e293b;">1. MATRIZ ESTADÍSTICA POR TRIBUNAL</div>
+        <table style="width: 100%; border-collapse: collapse; font-size: 8.5px; border: 1px solid #cbd5e1;">
+          <thead>
+            <tr style="background-color: #1e293b; color: white;">
+              <th style="padding: 5px; text-align: left;">Despacho Judicial</th>
+              <th style="padding: 5px; text-align: center;">Asignadas</th>
+              <th style="padding: 5px; text-align: center;">Practicadas (Devueltas)</th>
+              <th style="padding: 5px; text-align: center;">En Ruta (Pendientes)</th>
+              <th style="padding: 5px; text-align: center;">% Efectividad</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tribStats.map((t, idx) => `
+              <tr style="background-color: ${idx % 2 === 1 ? '#f8fafc' : '#ffffff'}; border-bottom: 1px solid #e2e8f0;">
+                <td style="padding: 4px 6px; font-weight: bold;">Tribunal ${t.codigo}</td>
+                <td style="padding: 4px; text-align: center;">${t.total}</td>
+                <td style="padding: 4px; text-align: center; color: #047857; font-weight: bold;">${t.devueltas}</td>
+                <td style="padding: 4px; text-align: center; color: #b45309;">${t.pendientes}</td>
+                <td style="padding: 4px; text-align: center; font-weight: bold;">${t.efectividad}%</td>
+              </tr>
+            `).join('')}
+            <tr style="background-color: #f1f5f9; font-weight: bold; border-top: 2px solid #cbd5e1;">
+              <td style="padding: 5px 6px;">TOTAL CONSOLIDADO</td>
+              <td style="padding: 5px; text-align: center;">${total}</td>
+              <td style="padding: 5px; text-align: center; color: #047857;">${devueltas}</td>
+              <td style="padding: 5px; text-align: center; color: #b45309;">${enRuta}</td>
+              <td style="padding: 5px; text-align: center;">${pct}%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Matriz por Artículos COPP -->
+      <div style="margin-bottom: 14px;">
+        <div style="font-size: 10px; font-weight: bold; margin-bottom: 4px; color: #1e293b;">2. TIPIFICACIÓN POR ARTÍCULOS DEL C.O.P.P.</div>
+        <table style="width: 100%; border-collapse: collapse; font-size: 8.5px; border: 1px solid #cbd5e1;">
+          <thead>
+            <tr style="background-color: #1e293b; color: white;">
+              <th style="padding: 5px; text-align: center; width: 100px;">Artículo COPP</th>
+              <th style="padding: 5px; text-align: center; width: 80px;">Diligencias</th>
+              <th style="padding: 5px; text-align: left;">Descripción Legal de la Diligencia</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td style="padding: 4px; text-align: center; font-weight: bold;">167</td><td style="padding: 4px; text-align: center; font-weight: bold;">${a167}</td><td style="padding: 4px 6px;">Citación Personal del Imputado</td></tr>
+            <tr style="background-color: #f8fafc;"><td style="padding: 4px; text-align: center; font-weight: bold;">168</td><td style="padding: 4px; text-align: center; font-weight: bold;">${a168}</td><td style="padding: 4px 6px;">Citación por Boleta / Domicilio</td></tr>
+            <tr><td style="padding: 4px; text-align: center; font-weight: bold;">169</td><td style="padding: 4px; text-align: center; font-weight: bold;">${a169}</td><td style="padding: 4px 6px;">Citación por Cartel en Estrado o Prensa</td></tr>
+            <tr style="background-color: #f8fafc;"><td style="padding: 4px; text-align: center; font-weight: bold;">170</td><td style="padding: 4px; text-align: center; font-weight: bold;">${a170}</td><td style="padding: 4px 6px;">Citación de Víctimas, Testigos, Expertos y Terceros</td></tr>
+            <tr><td style="padding: 4px; text-align: center; font-weight: bold;">171</td><td style="padding: 4px; text-align: center; font-weight: bold;">${a171}</td><td style="padding: 4px 6px;">Citación de Militares y Funcionarios / Exhorto o Comisión</td></tr>
+            <tr style="background-color: #f8fafc;"><td style="padding: 4px; text-align: center; font-weight: bold;">165</td><td style="padding: 4px; text-align: center; font-weight: bold;">${a165}</td><td style="padding: 4px 6px;">Notificación de Autos, Decretos y Resoluciones</td></tr>
+            <tr><td style="padding: 4px; text-align: center; font-weight: bold;">S 165</td><td style="padding: 4px; text-align: center; font-weight: bold;">${aS165}</td><td style="padding: 4px 6px;">Notificación de Sobreseimiento</td></tr>
+            <tr style="background-color: #f1f5f9; font-weight: bold; border-top: 2px solid #cbd5e1;">
+              <td style="padding: 4px; text-align: center;">TOTAL DILIGENCIAS</td>
+              <td style="padding: 4px; text-align: center; color: #4338ca;">${totalArts}</td>
+              <td style="padding: 4px 6px;">Artículos COPP aplicados en el período</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Firmas Oficiales -->
+      <div style="display: flex; justify-content: space-between; margin-top: 18px;">
+        <div style="width: 46%; border: 1px solid #cbd5e1; border-radius: 4px; padding: 10px; background-color: #f8fafc;">
+          <div style="font-size: 8px; font-weight: bold; color: #0f172a; margin-bottom: 25px;">ENTREGADO POR (ALGUACILAZGO):</div>
+          <div style="border-top: 1px solid #475569; padding-top: 3px; font-size: 7.5px; color: #64748b; text-align: center;">Firma y Sello Oficial</div>
+        </div>
+        <div style="width: 46%; border: 1px solid #cbd5e1; border-radius: 4px; padding: 10px; background-color: #f8fafc;">
+          <div style="font-size: 8px; font-weight: bold; color: #0f172a; margin-bottom: 25px;">RECIBIDO CONFORME (PRESIDENCIA / SECRETARÍA):</div>
+          <div style="border-top: 1px solid #475569; padding-top: 3px; font-size: 7.5px; color: #64748b; text-align: center;">Firma, Fecha y Sello Conforme</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Guarda e imprime el Reporte Estadístico Periódico oficial (por Día, Semana o Mes)
+ * Formato 100% estadístico: Membrete oficial, métricas clave, matriz de tribunales, artículos del COPP y firmas.
+ * Sin listado individual de boletas.
  */
 export function exportarRelacionPeriodicaPDF(
   boletas: BoletaJudicial[],
@@ -2967,64 +3637,122 @@ export function exportarRelacionPeriodicaPDF(
   modoSalida: ModoSalidaDocumento = 'descargar'
 ) {
   const doc = new jsPDF({
-    orientation: 'landscape',
+    orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: 'legal',
   }) as jsPDFWithPlugin;
 
-  // Membrete Judicial
+  // 1. Membrete Judicial
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(15, 23, 42);
-  doc.text(config.entePrincipal, 148, 12, { align: 'center' });
+  doc.text(config.entePrincipal, 107.95, 12, { align: 'center' });
   doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
-  doc.text(config.circuitoJudicial, 148, 17, { align: 'center' });
-  doc.text(config.unidad, 148, 21, { align: 'center' });
+  doc.text(config.circuitoJudicial, 107.95, 17, { align: 'center' });
+  doc.text(config.unidad, 107.95, 21, { align: 'center' });
 
   doc.setDrawColor(15, 23, 42);
   doc.setLineWidth(0.5);
-  doc.line(14, 24, 283, 24);
+  doc.line(8, 24, 207.9, 24);
 
-  doc.setFontSize(11);
+  // 2. Título Estadístico
+  doc.setFontSize(10.5);
   doc.setFont('helvetica', 'bold');
-  doc.text(`RELACIÓN JUDICIAL DE BOLETAS Y OFICIOS (${tipoPeriodo}: ${etiquetaPeriodo.toUpperCase()})`, 14, 30);
-  doc.setFontSize(8);
+  doc.text(`REPORTE ESTADÍSTICO JUDICIAL - CONTROL PERIÓDICO (${tipoPeriodo}: ${etiquetaPeriodo.toUpperCase()})`, 8, 30);
+  doc.setFontSize(7.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(71, 85, 105);
-  const totalDevueltas = boletas.filter(b => b.devueltaAlTribunal).length;
   doc.text(
-    `Total Actuaciones: ${boletas.length} | Practicadas/Devueltas: ${totalDevueltas} | Pendientes en Ruta: ${boletas.length - totalDevueltas} | Generado el: ${new Date().toLocaleDateString('es-VE')}`, 
-    14, 
-    35
+    `Resumen Numérico Consolidado de Gestión y Rendición de Cuentas • Emisión: ${new Date().toLocaleDateString('es-VE')}`,
+    8,
+    34.5
   );
 
-  const headers = ['Nº', 'F. ASIG.', 'CAUSA Nº', 'BOLETA', 'OFICIO', 'NOTIFICADO / CITADO', 'CARÁCTER', 'TRI', 'AUDIENCIA', 'ALGUACIL', 'ART.', 'ESTADO'];
-  const rows = boletas.map((b, idx) => {
-    const esNotif = b.esSoloNotificacion || b.fechaAudiencia === 'NOTIFICACION' || !b.fechaAudiencia;
-    return [
-      idx + 1,
-      b.fechaAsignacion ? formatFechaDisplay(b.fechaAsignacion) : '-',
-      b.numeroCausa || '-',
-      b.boletaNumero || '-',
-      b.numeroOficio || '-',
-      b.notificadoCitado || '-',
-      b.tipoCitado || '-',
-      b.tribunalOtro || b.tribunal || '-',
-      esNotif ? 'NOTIF.' : formatFechaDisplay(b.fechaAudiencia),
-      b.alguacilPractica || 'SIN ASIGNAR',
-      b.articuloCOPP || (b.articulosCOPP ? b.articulosCOPP.join(', ') : '-'),
-      b.devueltaAlTribunal ? 'DEVUELTA' : 'EN RUTA'
-    ];
+  const total = boletas.length;
+  const devueltas = boletas.filter(b => b.devueltaAlTribunal).length;
+  const enRuta = total - devueltas;
+  const pct = total > 0 ? Math.round((devueltas / total) * 100) : 0;
+
+  // 3. Cuadros de Indicadores Clave (KPIs)
+  const kpiY = 38;
+  const boxWidth = 47.5;
+  const boxHeight = 14;
+  const gap = 3.3;
+
+  // Box 1: Total Asignadas
+  doc.setFillColor(241, 245, 249);
+  doc.roundedRect(8, kpiY, boxWidth, boxHeight, 1.5, 1.5, 'F');
+  doc.setFontSize(6.8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(71, 85, 105);
+  doc.text('TOTAL ASIGNADAS', 8 + boxWidth / 2, kpiY + 4.5, { align: 'center' });
+  doc.setFontSize(11);
+  doc.setTextColor(15, 23, 42);
+  doc.text(String(total), 8 + boxWidth / 2, kpiY + 11, { align: 'center' });
+
+  // Box 2: Practicadas (Devueltas)
+  const b2X = 8 + boxWidth + gap;
+  doc.setFillColor(236, 253, 245);
+  doc.roundedRect(b2X, kpiY, boxWidth, boxHeight, 1.5, 1.5, 'F');
+  doc.setFontSize(6.8);
+  doc.setTextColor(4, 120, 87);
+  doc.text('PRACTICADAS (DEVUELTAS)', b2X + boxWidth / 2, kpiY + 4.5, { align: 'center' });
+  doc.setFontSize(11);
+  doc.setTextColor(6, 95, 70);
+  doc.text(String(devueltas), b2X + boxWidth / 2, kpiY + 11, { align: 'center' });
+
+  // Box 3: En Ruta (Pendientes)
+  const b3X = b2X + boxWidth + gap;
+  doc.setFillColor(255, 251, 235);
+  doc.roundedRect(b3X, kpiY, boxWidth, boxHeight, 1.5, 1.5, 'F');
+  doc.setFontSize(6.8);
+  doc.setTextColor(180, 83, 9);
+  doc.text('EN RUTA (PENDIENTES)', b3X + boxWidth / 2, kpiY + 4.5, { align: 'center' });
+  doc.setFontSize(11);
+  doc.setTextColor(146, 64, 14);
+  doc.text(String(enRuta), b3X + boxWidth / 2, kpiY + 11, { align: 'center' });
+
+  // Box 4: % Efectividad
+  const b4X = b3X + boxWidth + gap;
+  doc.setFillColor(238, 242, 255);
+  doc.roundedRect(b4X, kpiY, boxWidth, boxHeight, 1.5, 1.5, 'F');
+  doc.setFontSize(6.8);
+  doc.setTextColor(67, 56, 202);
+  doc.text('EFECTIVIDAD PROCESAL', b4X + boxWidth / 2, kpiY + 4.5, { align: 'center' });
+  doc.setFontSize(11);
+  doc.setTextColor(55, 48, 163);
+  doc.text(`${pct}%`, b4X + boxWidth / 2, kpiY + 11, { align: 'center' });
+
+  // 4. Tabla 1: Matriz de Gestión por Tribunales
+  const tribunalesCodigos = ['C1', 'C2', 'C3', 'J1', 'J2', 'J3', 'E1', 'E2', 'TPM1', 'TPM2', 'SPA 1', 'OTRO'];
+  const tribRows: (string | number)[][] = [];
+
+  tribunalesCodigos.forEach(tri => {
+    const bols = boletas.filter(b => {
+      const t = (b.tribunal || '').toUpperCase().trim();
+      if (tri === 'OTRO') return t === 'OTRO' || !tribunalesCodigos.slice(0, 11).includes(t);
+      return t === tri;
+    });
+    if (bols.length > 0) {
+      const dev = bols.filter(b => b.devueltaAlTribunal).length;
+      const pend = bols.length - dev;
+      const pctTri = Math.round((dev / bols.length) * 100);
+      tribRows.push([`Tribunal ${tri}`, bols.length, dev, pend, `${pctTri}%`]);
+    }
   });
 
+  tribRows.push(['TOTAL GENERAL CONSOLIDADO', total, devueltas, enRuta, `${pct}%`]);
+
   autoTable(doc, {
-    startY: 38,
-    head: [headers],
-    body: rows,
+    startY: kpiY + boxHeight + 4,
+    margin: { left: 8, right: 8 },
+    tableWidth: 199.9,
+    head: [['DESPACHO JUDICIAL', 'ASIGNADAS', 'PRACTICADAS (DEVUELTAS)', 'EN RUTA (PENDIENTES)', '% EFECTIVIDAD']],
+    body: tribRows,
     theme: 'grid',
     styles: {
-      fontSize: 7.5,
+      fontSize: 7.2,
       cellPadding: 1.5,
       valign: 'middle',
     },
@@ -3035,43 +3763,93 @@ export function exportarRelacionPeriodicaPDF(
       halign: 'center',
     },
     columnStyles: {
-      0: { halign: 'center', cellWidth: 8 },
-      1: { halign: 'center', cellWidth: 18 },
-      2: { halign: 'left', fontStyle: 'bold', cellWidth: 32 },
-      3: { halign: 'center', cellWidth: 16 },
-      4: { halign: 'center', cellWidth: 18 },
-      5: { halign: 'left', cellWidth: 46 },
-      6: { halign: 'center', cellWidth: 20 },
-      7: { halign: 'center', fontStyle: 'bold', cellWidth: 16 },
-      8: { halign: 'center', cellWidth: 18 },
-      9: { halign: 'left', cellWidth: 32 },
-      10: { halign: 'center', cellWidth: 16 },
-      11: { halign: 'center', fontStyle: 'bold', cellWidth: 20 },
+      0: { halign: 'left', fontStyle: 'bold', cellWidth: 70 },
+      1: { halign: 'center', cellWidth: 32 },
+      2: { halign: 'center', cellWidth: 35 },
+      3: { halign: 'center', cellWidth: 35 },
+      4: { halign: 'center', fontStyle: 'bold', cellWidth: 27.9 },
     },
   });
 
-  const finalY = (doc.lastAutoTable?.finalY || 160) + 8;
-  if (finalY < 185) {
-    doc.rect(14, finalY, 120, 22);
+  // 5. Tabla 2: Artículos del C.O.P.P.
+  let a167 = 0, a168 = 0, a169 = 0, a170 = 0, a171 = 0, a165 = 0, aS165 = 0;
+  boletas.forEach(b => {
+    if (hasArticulo(b, '167')) a167++;
+    if (hasArticulo(b, '168')) a168++;
+    if (hasArticulo(b, '169')) a169++;
+    if (hasArticulo(b, '170')) a170++;
+    if (hasArticulo(b, '171')) a171++;
+    if (hasArticulo(b, '165')) a165++;
+    if (hasArticulo(b, 'S_165')) aS165++;
+  });
+  const totalArts = a167 + a168 + a169 + a170 + a171 + a165 + aS165;
+
+  const artsRows = [
+    ['Artículo 167', a167, 'Citación Personal del Imputado'],
+    ['Artículo 168', a168, 'Citación por Boleta / Domicilio'],
+    ['Artículo 169', a169, 'Citación por Cartel en Estrado o Prensa'],
+    ['Artículo 170', a170, 'Citación de Víctimas, Testigos, Expertos y Terceros'],
+    ['Artículo 171', a171, 'Citación de Militares y Funcionarios / Exhorto o Comisión'],
+    ['Artículo 165', a165, 'Notificación de Autos, Decretos y Resoluciones'],
+    ['S 165', aS165, 'Notificación de Sobreseimiento'],
+    ['TOTAL ARTÍCULOS', totalArts, 'Total de Diligencias Tipificadas COPP en el Período'],
+  ];
+
+  const table1End = doc.lastAutoTable?.finalY || 120;
+
+  autoTable(doc, {
+    startY: table1End + 5,
+    margin: { left: 8, right: 8 },
+    tableWidth: 199.9,
+    head: [['ARTÍCULO C.O.P.P.', 'DILIGENCIAS', 'DESCRIPCIÓN LEGAL DE LA DILIGENCIA']],
+    body: artsRows,
+    theme: 'grid',
+    styles: {
+      fontSize: 7.2,
+      cellPadding: 1.5,
+      valign: 'middle',
+    },
+    headStyles: {
+      fillColor: [30, 41, 59],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      halign: 'center',
+    },
+    columnStyles: {
+      0: { halign: 'center', fontStyle: 'bold', cellWidth: 45 },
+      1: { halign: 'center', fontStyle: 'bold', cellWidth: 30 },
+      2: { halign: 'left', cellWidth: 124.9 },
+    },
+  });
+
+  // 6. Firmas oficiales de responsabilidad
+  const finalY = (doc.lastAutoTable?.finalY || 200) + 8;
+  const pageHeight = doc.internal.pageSize.height;
+
+  if (finalY < pageHeight - 35) {
+    // Firma 1: Alguacilazgo (Sin ENCARGADO)
+    doc.rect(8, finalY, 96, 22);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(15, 23, 42);
-    doc.text('ENTREGADO POR (ALGUACILAZGO):', 16, finalY + 5);
+    doc.text('ENTREGADO POR (ALGUACILAZGO):', 11, finalY + 5);
     doc.setFont('helvetica', 'normal');
-    doc.text(`ENCARGADO: ${config.jefeAlguacilazgo || '_________________________'}`, 16, finalY + 12);
-    doc.text('Firma y Sello: _________________________________', 16, finalY + 18);
+    doc.text('Unidad de Actos y Comunicación', 11, finalY + 11);
+    doc.text('Firma y Sello Oficial: _________________________', 11, finalY + 18);
 
-    doc.rect(160, finalY, 123, 22);
+    // Firma 2: Tribunal / Presidencia
+    doc.rect(111.9, finalY, 96, 22);
     doc.setFont('helvetica', 'bold');
-    doc.text('RECIBIDO CONFORME (DESPACHO / TRIBUNAL):', 162, finalY + 5);
+    doc.text('RECIBIDO CONFORME (PRESIDENCIA / SECRETARÍA):', 114, finalY + 5);
     doc.setFont('helvetica', 'normal');
-    doc.text('Nombre del Funcionario: _________________________', 162, finalY + 12);
-    doc.text('Fecha y Sello: __________________________________', 162, finalY + 18);
+    doc.text('Nombre del Funcionario: _________________________', 114, finalY + 11);
+    doc.text('Fecha y Sello: __________________________________', 114, finalY + 18);
   }
 
   const cleanEtiqueta = etiquetaPeriodo.replace(/[\s/\\:]+/g, '_');
-  const fileName = `Relacion_${tipoPeriodo}_${cleanEtiqueta}_${config.mesRutaActual.replace(/\s+/g, '_')}.pdf`;
-  procesarSalidaPDF(doc, fileName, modoSalida, `Relación ${tipoPeriodo}: ${etiquetaPeriodo}`);
+  const fileName = `Estadisticas_${tipoPeriodo}_${cleanEtiqueta}_${config.mesRutaActual.replace(/\s+/g, '_')}.pdf`;
+  const htmlPrint = generarHtmlRelacionPeriodica(boletas, config, tipoPeriodo, etiquetaPeriodo);
+  procesarSalidaPDF(doc, fileName, modoSalida, `Estadísticas ${tipoPeriodo}: ${etiquetaPeriodo} (Reporte Oficial)`, htmlPrint);
 }
 
 

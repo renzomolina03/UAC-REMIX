@@ -33,6 +33,7 @@ interface HeaderProps {
   onBloquearEstacion?: () => void;
   onAbrirCambioPassword?: () => void;
   onAbrirAuditoria?: () => void;
+  onAbrirCredencialesUsuarios?: () => void;
   onCerrarSesion?: () => void;
 }
 
@@ -51,6 +52,7 @@ export const Header: React.FC<HeaderProps> = ({
   onBloquearEstacion,
   onAbrirCambioPassword,
   onAbrirAuditoria,
+  onAbrirCredencialesUsuarios,
   onCerrarSesion,
 }) => {
   const [currentDateTime, setCurrentDateTime] = useState<Date>(new Date());
@@ -172,17 +174,6 @@ export const Header: React.FC<HeaderProps> = ({
             {/* Botón de Instalación PWA (si es instalable) */}
             <PWAInstallButton />
 
-            {/* Estado de Red Sin Conexión (solo si está desconectado) */}
-            {!isOnline && (
-              <div 
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold border bg-amber-950/90 border-amber-500/70 text-amber-300 animate-pulse"
-                title="Modo sin internet: 100% Operativo y guardado en disco"
-              >
-                <WifiOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span className="hidden sm:inline">Sin Internet (Guardado Local)</span>
-              </div>
-            )}
-
             {/* Configuración de Despacho y Alguacilazgo */}
             <button
               id="header-btn-config"
@@ -200,6 +191,7 @@ export const Header: React.FC<HeaderProps> = ({
                 onBloquearEstacion={onBloquearEstacion}
                 onAbrirCambioPassword={onAbrirCambioPassword}
                 onAbrirAuditoria={onAbrirAuditoria}
+                onAbrirCredencialesUsuarios={onAbrirCredencialesUsuarios}
                 onCerrarSesion={onCerrarSesion}
               />
             )}

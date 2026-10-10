@@ -54,26 +54,121 @@ export function generarIdHoja(idInicial: string = 'UAC: 0001', indice: number = 
 }
 
 /**
+ * Normaliza la clave compuesta de Causa y Boleta para agrupar boletas que pertenecen
+ * al mismo acto procesal o citación múltiple.
+ */
+export function getCausaBoletaKey(b: BoletaJudicial): string {
+  const causa = (b.numeroCausa || '').trim().toUpperCase().replace(/[\s\-_/.]/g, '');
+  if (!causa) return '';
+  const bolRaw = (b.boletaNumero || '').trim().toUpperCase();
+  const bol = (bolRaw === 'S/N' || bolRaw === 'SN' || bolRaw === '-' || bolRaw === 'N/A' || !bolRaw)
+    ? '__SN__'
+    : bolRaw.replace(/[\s\-_/.]/g, '');
+  const tri = (b.tribunal || '').trim().toUpperCase();
+  return `${tri}:::${causa}:::${bol}`;
+}
+
+/**
  * Calcula la distribución por hojas (folios/páginas) del lote de boletas.
- * Cuando una hoja alcanza su capacidad (ej: 30 boletas) o el usuario marca
- * "finDePagina" (ej: terminar con 14 boletas), la hoja se cierra y comienza una nueva.
+ * Reglas de cierre de hoja:
+ * 1. Forzado fin de página manual (b.finDePagina).
+ * 2. Capacidad alcanzada (ej: 40 o 30 boletas llenan la hoja).
+ * 3. Cambio de fecha de asignación entre boletas consecutivas.
+ * 4. REGLA FUNDAMENTAL DE NO SEPARACIÓN: Cuando una hoja está por terminar y
+ *    hay varios notificados y citados con el mismo número de causa y boleta,
+ *    NO pueden quedar separados en otra hoja. Si el grupo no cabe completo
+ *    en los renglones restantes de la hoja actual, la hoja actual se cierra y
+ *    TODO el grupo pasa unido a la siguiente hoja.
  */
 export function calcularHojasLote(
   boletas: BoletaJudicial[],
-  capacidadPorHoja: number = 30,
+  capacidadPorHoja: number = 40,
   idInicial: string = 'UAC: 0001'
 ): HojaLote[] {
   if (!boletas || boletas.length === 0) {
     return [];
   }
 
-  const capacidadDefault = Math.max(5, capacidadPorHoja || 30);
+  const capacidadDefault = Math.max(5, capacidadPorHoja || 40);
   const hojas: HojaLote[] = [];
   let currentBoletas: BoletaJudicial[] = [];
   let currentStartIndex = 0;
 
+  const cerrarHojaActual = () => {
+    if (currentBoletas.length === 0) return;
+
+    const cantidad = currentBoletas.length;
+    const estaLlena = cantidad >= capacidadDefault;
+    const idHoja = generarIdHoja(idInicial, hojas.length);
+    const fin = currentStartIndex + cantidad;
+
+    const totalDevueltas = currentBoletas.filter(item => item.devueltaAlTribunal).length;
+    const pendientes = cantidad - totalDevueltas;
+    const porcentajeEfectividad = cantidad > 0 ? Math.round((totalDevueltas / cantidad) * 100) : 0;
+
+    const conteosArticulos = {
+      '167': currentBoletas.filter(item => hasArticulo(item, '167')).length,
+      '168': currentBoletas.filter(item => hasArticulo(item, '168')).length,
+      '169': currentBoletas.filter(item => hasArticulo(item, '169')).length,
+      '170': currentBoletas.filter(item => hasArticulo(item, '170')).length,
+      '171': currentBoletas.filter(item => hasArticulo(item, '171')).length,
+      '165': currentBoletas.filter(item => hasArticulo(item, '165')).length,
+      'S_165': currentBoletas.filter(item => hasArticulo(item, 'S_165')).length,
+    };
+
+    const tribunalesSet = new Set<string>();
+    const fechasSet = new Set<string>();
+    currentBoletas.forEach(item => {
+      if (item.tribunal) tribunalesSet.add(item.tribunal);
+      if (item.fechaAsignacion) fechasSet.add(item.fechaAsignacion);
+    });
+
+    const fechasList = Array.from(fechasSet);
+    const fechaAsignacionHoja = fechasList.length > 0 ? fechasList[0] : (currentBoletas[0]?.fechaAsignacion || '');
+
+    hojas.push({
+      numeroHoja: hojas.length + 1,
+      idHoja,
+      boletas: [...currentBoletas],
+      cantidad,
+      capacidad: capacidadDefault,
+      estaLlena,
+      rangoItems: { desde: currentStartIndex + 1, hasta: fin },
+      totalDevueltas,
+      pendientes,
+      porcentajeEfectividad,
+      conteosArticulos,
+      tribunalesInvolucrados: Array.from(tribunalesSet),
+      fechaAsignacion: fechaAsignacionHoja,
+      fechasAsignacionInvolucradas: fechasList,
+    });
+
+    currentStartIndex = fin;
+    currentBoletas = [];
+  };
+
   for (let i = 0; i < boletas.length; i++) {
     const b = boletas[i];
+    const keyActual = getCausaBoletaKey(b);
+
+    // REGLA FUNDAMENTAL DE NO SEPARACIÓN:
+    // Si la boleta actual inicia un grupo con la misma Causa y Boleta que contiene
+    // múltiples notificados/citados, y no caben todos en los renglones disponibles
+    // de la hoja actual, cerramos la hoja actual para que el grupo completo empiece
+    // unido en la siguiente hoja.
+    const esInicioDeGrupo = keyActual !== '' && (i === 0 || getCausaBoletaKey(boletas[i - 1]) !== keyActual);
+    if (esInicioDeGrupo && currentBoletas.length > 0) {
+      let tamanoGrupo = 1;
+      while (i + tamanoGrupo < boletas.length && getCausaBoletaKey(boletas[i + tamanoGrupo]) === keyActual) {
+        tamanoGrupo++;
+      }
+
+      const espacioRestante = capacidadDefault - currentBoletas.length;
+      if (tamanoGrupo > 1 && tamanoGrupo > espacioRestante) {
+        cerrarHojaActual();
+      }
+    }
+
     currentBoletas.push(b);
 
     const nextB = i < boletas.length - 1 ? boletas[i + 1] : null;
@@ -81,13 +176,10 @@ export function calcularHojasLote(
     // Condición 1: Forzado fin de página manual (b.finDePagina)
     const esForzadoFin = !!b.finDePagina;
 
-    // Condición 2: Capacidad alcanzada (30 boletas llenan la hoja)
+    // Condición 2: Capacidad alcanzada (ej: 40 o 30 boletas llenan la hoja)
     const esCapacidadAlcanzada = currentBoletas.length >= capacidadDefault;
 
     // Condición 3: Cambio de fecha de asignación entre boletas consecutivas
-    // "Que no hallan confusión en la hoja por la fecha de asignacion,
-    //  si son 40 bol una hoja debería estar llena con su 30 bol.
-    //  Y continúa con la siguiente hoja de 10 bol. Termina la hoja y empieza una nueva si lo requiere para empezar la nueva hoja."
     const fechaActual = b.fechaAsignacion?.trim();
     const fechaSiguiente = nextB?.fechaAsignacion?.trim();
     const esCambioDeFecha = !!nextB && !!fechaActual && !!fechaSiguiente && fechaActual !== fechaSiguiente;
@@ -96,55 +188,7 @@ export function calcularHojasLote(
     const esUltima = i === boletas.length - 1;
 
     if (esForzadoFin || esCapacidadAlcanzada || esCambioDeFecha || esUltima) {
-      const cantidad = currentBoletas.length;
-      const capacidadEfectiva = esCapacidadAlcanzada ? capacidadDefault : (esForzadoFin || esCambioDeFecha ? cantidad : capacidadDefault);
-      const estaLlena = cantidad >= capacidadDefault;
-      const idHoja = generarIdHoja(idInicial, hojas.length);
-      const fin = currentStartIndex + cantidad;
-
-      const totalDevueltas = currentBoletas.filter(item => item.devueltaAlTribunal).length;
-      const pendientes = cantidad - totalDevueltas;
-      const porcentajeEfectividad = cantidad > 0 ? Math.round((totalDevueltas / cantidad) * 100) : 0;
-
-      const conteosArticulos = {
-        '167': currentBoletas.filter(item => hasArticulo(item, '167')).length,
-        '168': currentBoletas.filter(item => hasArticulo(item, '168')).length,
-        '169': currentBoletas.filter(item => hasArticulo(item, '169')).length,
-        '170': currentBoletas.filter(item => hasArticulo(item, '170')).length,
-        '171': currentBoletas.filter(item => hasArticulo(item, '171')).length,
-        '165': currentBoletas.filter(item => hasArticulo(item, '165')).length,
-        'S_165': currentBoletas.filter(item => hasArticulo(item, 'S_165')).length,
-      };
-
-      const tribunalesSet = new Set<string>();
-      const fechasSet = new Set<string>();
-      currentBoletas.forEach(item => {
-        if (item.tribunal) tribunalesSet.add(item.tribunal);
-        if (item.fechaAsignacion) fechasSet.add(item.fechaAsignacion);
-      });
-
-      const fechasList = Array.from(fechasSet);
-      const fechaAsignacionHoja = fechasList.length > 0 ? fechasList[0] : (b.fechaAsignacion || '');
-
-      hojas.push({
-        numeroHoja: hojas.length + 1,
-        idHoja,
-        boletas: [...currentBoletas],
-        cantidad,
-        capacidad: capacidadDefault,
-        estaLlena,
-        rangoItems: { desde: currentStartIndex + 1, hasta: fin },
-        totalDevueltas,
-        pendientes,
-        porcentajeEfectividad,
-        conteosArticulos,
-        tribunalesInvolucrados: Array.from(tribunalesSet),
-        fechaAsignacion: fechaAsignacionHoja,
-        fechasAsignacionInvolucradas: fechasList,
-      });
-
-      currentStartIndex = fin;
-      currentBoletas = [];
+      cerrarHojaActual();
     }
   }
 
@@ -156,7 +200,7 @@ export function calcularHojasLote(
  */
 export function mapearBoletasAHojas(
   boletas: BoletaJudicial[],
-  capacidadPorHoja: number = 30,
+  capacidadPorHoja: number = 40,
   idInicial: string = 'uac0001'
 ): Map<string, { idHoja: string; numeroHoja: number; posicionEnHoja: number }> {
   const map = new Map<string, { idHoja: string; numeroHoja: number; posicionEnHoja: number }>();

@@ -60,9 +60,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     return boletas.filter(b => b.tribunal.toUpperCase() === selectedTribunal.toUpperCase());
   }, [boletas, selectedTribunal]);
 
-  // Hojas calculadas dinámicamente (30 por hoja reglamentaria)
+  // Hojas calculadas dinámicamente (40 por hoja - capacidad máxima calculada)
   const hojasCalculadasPdf = useMemo(() => {
-    return calcularHojasLote(boletasParaPdf, 30, pdfIdInicial);
+    return calcularHojasLote(boletasParaPdf, 40, pdfIdInicial);
   }, [boletasParaPdf, pdfIdInicial]);
 
   if (!isOpen) return null;
@@ -80,7 +80,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         hojasSeleccionadas: pdfModoSeleccion === 'seleccionadas' && pdfHojasSeleccionadas.length > 0
           ? pdfHojasSeleccionadas
           : undefined,
-        capacidadPorHoja: 30,
+        capacidadPorHoja: 40,
         idInicial: pdfIdInicial
       });
       setSuccessMsg('¡Reporte PDF oficial por hojas generado exitosamente!');

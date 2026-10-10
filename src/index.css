@@ -1,7 +1,57 @@
 @import "tailwindcss";
 
+@page {
+  size: legal portrait;
+  margin: 6mm 8mm 6mm 8mm;
+}
+
+#uac-print-area {
+  display: none;
+}
+
 @media print {
-  .print\:hidden {
+  /* Ocultar toda la interfaz web de la aplicación y modales interactivos */
+  #root,
+  .print\:hidden,
+  .fixed,
+  header,
+  footer,
+  aside,
+  button,
+  nav,
+  dialog {
     display: none !important;
   }
+
+  body > *:not(#uac-print-area) {
+    display: none !important;
+  }
+
+  html, body {
+    background: #ffffff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Mostrar exclusivamente el área oficial de documentos judiciales en hoja oficio vertical */
+  #uac-print-area {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  #uac-print-area * {
+    visibility: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
 }
+

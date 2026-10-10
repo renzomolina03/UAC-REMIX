@@ -370,7 +370,8 @@ export function exportarAcusesUnificadosMeridaExcel(
 }
 
 /**
- * Guarda y exporta la relación judicial por Día, Semana o Mes en formato Excel estructurado
+ * Guarda y exporta el Reporte Estadístico Periódico Judicial por Día, Semana o Mes en formato Excel estructurado
+ * Enfoque 100% estadístico: Resumen ejecutivo, matriz de tribunales, artículos del COPP y rendimiento de alguaciles.
  */
 export function exportarRelacionPeriodicaExcel(
   boletas: BoletaJudicial[],
@@ -380,77 +381,127 @@ export function exportarRelacionPeriodicaExcel(
 ) {
   const wb = XLSX.utils.book_new();
 
-  const dataRows = boletas.map((b, idx) => {
-    const esNotif = b.esSoloNotificacion || b.fechaAudiencia === 'NOTIFICACION' || !b.fechaAudiencia;
-    return [
-      idx + 1,
-      b.fechaAsignacion ? formatFechaDisplay(b.fechaAsignacion) : '-',
-      b.numeroCausa || '-',
-      b.boletaNumero || '-',
-      b.numeroOficio || '',
-      b.dependencia === 'SECRETARIA' ? 'SECRETARÍA' : 'NOTIFICACIÓN Y CITACIÓN',
-      b.notificadoCitado || '-',
-      b.tipoCitado || 'IMPUTADO',
-      b.tribunalOtro || b.tribunal || 'C1',
-      esNotif ? 'NOTIFICACIÓN' : formatFechaDisplay(b.fechaAudiencia),
-      b.alguacilPractica || 'SIN ASIGNAR',
-      b.articuloCOPP || (b.articulosCOPP ? b.articulosCOPP.join(', ') : ''),
-      b.devueltaAlTribunal ? `DEVUELTA (${b.fechaDevueltaTribunal ? formatFechaDisplay(b.fechaDevueltaTribunal) : 'SÍ'})` : 'EN RUTA',
-      b.acuseRecibidoPor || '',
-      b.observaciones || '',
-    ];
+  const total = boletas.length;
+  const devueltas = boletas.filter(b => b.devueltaAlTribunal).length;
+  const enRuta = total - devueltas;
+  const pctEfectividad = total > 0 ? Math.round((devueltas / total) * 100) : 0;
+
+  // Tribunales del circuito y otros
+  const tribunalesCodigos = ['C1', 'C2', 'C3', 'J1', 'J2', 'J3', 'E1', 'E2', 'TPM1', 'TPM2', 'SPA 1', 'OTRO'];
+  const tribunalRows: (string | number)[][] = [];
+
+  tribunalesCodigos.forEach(tri => {
+    const bolsTri = boletas.filter(b => {
+      const t = (b.tribunal || '').toUpperCase().trim();
+      if (tri === 'OTRO') {
+        return t === 'OTRO' || !tribunalesCodigos.slice(0, 11).includes(t);
+      }
+      return t === tri;
+    });
+
+    if (bolsTri.length > 0) {
+      const dev = bolsTri.filter(b => b.devueltaAlTribunal).length;
+      const pend = bolsTri.length - dev;
+      const pct = Math.round((dev / bolsTri.length) * 100);
+      tribunalRows.push([
+        `Tribunal ${tri}`,
+        bolsTri.length,
+        dev,
+        pend,
+        `${pct}%`
+      ]);
+    }
   });
 
-  const sheetHeader = [
+  // Artículos del COPP
+  let c167 = 0, c168 = 0, c169 = 0, c170 = 0, c171 = 0, c165 = 0, cS165 = 0;
+  boletas.forEach(b => {
+    if (hasArticulo(b, '167')) c167++;
+    if (hasArticulo(b, '168')) c168++;
+    if (hasArticulo(b, '169')) c169++;
+    if (hasArticulo(b, '170')) c170++;
+    if (hasArticulo(b, '171')) c171++;
+    if (hasArticulo(b, '165')) c165++;
+    if (hasArticulo(b, 'S_165')) cS165++;
+  });
+  const totalArticulos = c167 + c168 + c169 + c170 + c171 + c165 + cS165;
+
+  // Alguaciles
+  const alguacilesMap = new Map<string, { total: number; dev: number }>();
+  boletas.forEach(b => {
+    const alg = (b.alguacilPractica || 'SIN ASIGNAR').trim().toUpperCase();
+    if (!alguacilesMap.has(alg)) {
+      alguacilesMap.set(alg, { total: 0, dev: 0 });
+    }
+    const stat = alguacilesMap.get(alg)!;
+    stat.total++;
+    if (b.devueltaAlTribunal) stat.dev++;
+  });
+
+  const alguacilesRows: (string | number)[][] = [];
+  alguacilesMap.forEach((stat, alg) => {
+    const pend = stat.total - stat.dev;
+    const pct = stat.total > 0 ? Math.round((stat.dev / stat.total) * 100) : 0;
+    alguacilesRows.push([
+      alg,
+      stat.total,
+      stat.dev,
+      pend,
+      `${pct}%`
+    ]);
+  });
+
+  const sheetData: (string | number)[][] = [
     [config.entePrincipal],
     [config.circuitoJudicial],
     [config.unidad],
-    [`RELACIÓN JUDICIAL DE CAUSAS Y BOLETAS - ${tipoPeriodo}: ${etiquetaPeriodo.toUpperCase()}`],
-    [`Total Boletas: ${boletas.length} • Fecha de Generación: ${new Date().toLocaleDateString('es-VE')}`],
+    [`REPORTE ESTADÍSTICO JUDICIAL - CONTROL PERIÓDICO (${tipoPeriodo}: ${etiquetaPeriodo.toUpperCase()})`],
+    [`Fecha de Generación: ${new Date().toLocaleDateString('es-VE')}`],
     [],
-    [
-      'Nº',
-      'F. ASIGNACIÓN',
-      'Nº DE CAUSA',
-      'BOLETA Nº',
-      'Nº DE OFICIO',
-      'DEPENDENCIA',
-      'PERSONA NOTIFICADA / CITADA',
-      'CARÁCTER',
-      'TRIBUNAL',
-      'FECHA AUDIENCIA',
-      'ALGUACIL PRACTICA',
-      'ART. COPP',
-      'ESTADO PROCESAL',
-      'RECIBIDO POR',
-      'OBSERVACIONES',
-    ],
-    ...dataRows,
+    ['1. RESUMEN EJECUTIVO DEL PERÍODO'],
+    ['INDICADOR', 'CANTIDAD', 'PORCENTAJE / ESTADO'],
+    ['Total Actuaciones Asignadas', total, '100%'],
+    ['Diligencias Practicadas / Devueltas', devueltas, `${pctEfectividad}% Efectividad`],
+    ['Diligencias Pendientes / En Ruta', enRuta, `${100 - pctEfectividad}% Pendiente`],
+    [],
+    ['2. MATRIZ DE GESTIÓN POR TRIBUNALES'],
+    ['DESPACHO JUDICIAL', 'ASIGNADAS', 'PRACTICADAS (DEVUELTAS)', 'EN RUTA (PENDIENTES)', 'EFECTIVIDAD (%)'],
+    ...tribunalRows,
+    ['TOTAL CONSOLIDADO', total, devueltas, enRuta, `${pctEfectividad}%`],
+    [],
+    ['3. TIPIFICACIÓN POR ARTÍCULOS DEL CÓDIGO ORGÁNICO PROCESAL PENAL (C.O.P.P.)'],
+    ['ARTÍCULO COPP', 'DILIGENCIAS', 'DESCRIPCIÓN DE LA DILIGENCIA'],
+    ['Artículo 167', c167, 'Citación Personal del Imputado'],
+    ['Artículo 168', c168, 'Citación por Boleta / Domicilio'],
+    ['Artículo 169', c169, 'Citación por Cartel en Estrado o Prensa'],
+    ['Artículo 170', c170, 'Citación de Víctimas, Testigos, Expertos y Terceros'],
+    ['Artículo 171', c171, 'Citación de Militares y Funcionarios / Exhorto o Comisión'],
+    ['Artículo 165', c165, 'Notificación de Autos, Decretos y Resoluciones'],
+    ['S 165', cS165, 'Notificación de Sobreseimiento'],
+    ['TOTAL ARTÍCULOS APLICADOS', totalArticulos, 'Diligencias COPP'],
+    [],
+    ['4. RENDIMIENTO DE ALGUACILAZGO EN EL PERÍODO'],
+    ['ALGUACIL', 'TOTAL ASIGNADAS', 'PRACTICADAS', 'PENDIENTES', 'EFECTIVIDAD (%)'],
+    ...alguacilesRows,
+    [],
+    ['RESPONSABLES DE RENDICIÓN DE CUENTAS'],
+    ['ENTREGADO POR (ALGUACILAZGO)', '', 'RECIBIDO POR (PRESIDENCIA / SECRETARÍA)'],
+    ['Firma y Sello Oficial', '', 'Firma y Sello Receptor'],
   ];
 
-  const ws = XLSX.utils.aoa_to_sheet(sheetHeader);
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
   ws['!cols'] = [
-    { wch: 6 },
-    { wch: 16 },
+    { wch: 38 },
     { wch: 22 },
-    { wch: 14 },
-    { wch: 16 },
+    { wch: 30 },
     { wch: 24 },
-    { wch: 32 },
-    { wch: 16 },
-    { wch: 18 },
-    { wch: 16 },
-    { wch: 24 },
-    { wch: 14 },
-    { wch: 18 },
-    { wch: 26 },
-    { wch: 28 },
+    { wch: 20 },
   ];
 
-  const sheetName = `Relacion_${tipoPeriodo.slice(0, 10)}`;
+  const sheetName = `Estadisticas_${tipoPeriodo}`;
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
   const cleanEtiqueta = etiquetaPeriodo.replace(/[\s/\\:]+/g, '_');
-  const fileName = `Relacion_${tipoPeriodo}_${cleanEtiqueta}_${config.mesRutaActual.replace(/\s+/g, '_')}.xlsx`;
+  const fileName = `Estadisticas_${tipoPeriodo}_${cleanEtiqueta}_${config.mesRutaActual.replace(/\s+/g, '_')}.xlsx`;
   XLSX.writeFile(wb, fileName);
 }
 

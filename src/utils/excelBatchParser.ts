@@ -235,13 +235,22 @@ export function normalizeTribunalCode(val: string, tribunales: TribunalInfo[], d
   const exact = tribunales.find(t => t.codigo.toUpperCase() === raw);
   if (exact) return exact.codigo;
 
+  // Detección directa de Sección Penal de Adolescentes (SPA 1)
+  if (/\b(?:SPA|SECCI[OÓ]N\s+(?:PENAL\s+DE\s+)?ADOLESCENTES?|ADOLESCENTES?)\b/i.test(raw)) {
+    const spaMatch = tribunales.find(t => t.codigo.toUpperCase() === 'SPA 1' || t.codigo.toUpperCase() === 'SPA');
+    if (spaMatch) return spaMatch.codigo;
+    return 'SPA 1';
+  }
+
   // 2. Normalización de formatos tipo "CONTROL 1" -> "C1", "JUICIO 2" -> "J2"
-  const nameToCodeMatch = raw.match(/^(CONTROL|JUICIO|SALA|EJECUCION)[ -]?(\d+)$/);
+  const nameToCodeMatch = raw.match(/^(CONTROL|JUICIO|SALA|SECCI[OÓ]N|EJECUCION)[ -]?(\d+)$/i);
   if (nameToCodeMatch) {
-    const prefix = nameToCodeMatch[1] === 'CONTROL' ? 'C' :
-                   nameToCodeMatch[1] === 'JUICIO' ? 'J' :
-                   nameToCodeMatch[1] === 'SALA' ? 'S' : 'E';
-    const candidate = `${prefix}${nameToCodeMatch[2]}`;
+    const tipoStr = nameToCodeMatch[1].toUpperCase();
+    const prefix = tipoStr === 'CONTROL' ? 'C' :
+                   tipoStr === 'JUICIO' ? 'J' :
+                   (tipoStr === 'SECCION' || tipoStr === 'SECCIÓN') ? 'SPA' :
+                   tipoStr === 'SALA' ? 'S' : 'E';
+    const candidate = prefix === 'SPA' ? `SPA ${nameToCodeMatch[2]}` : `${prefix}${nameToCodeMatch[2]}`;
     const match = tribunales.find(t => t.codigo.toUpperCase() === candidate);
     if (match) return match.codigo;
     return candidate;

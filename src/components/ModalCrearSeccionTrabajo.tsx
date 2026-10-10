@@ -296,7 +296,7 @@ export const ModalCrearSeccionTrabajo: React.FC<ModalCrearSeccionTrabajoProps> =
 
           {/* Pie con botones */}
           <div className="pt-2 flex items-center justify-between gap-2.5 border-t border-slate-100">
-            {seccionAEditar && onEliminarSeccion && (
+            {seccionAEditar && onEliminarSeccion && !['RUTA_NOTIFICACION_CITACION', 'CORREO_EXT', 'RUTA_INTERNA', 'OTROS_ESTADOS_MERIDA', 'SOBRESEIMIENTO'].includes(seccionAEditar.codigo) && (
               <button
                 type="button"
                 onClick={() => {

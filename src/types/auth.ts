@@ -86,6 +86,7 @@ export interface UsuarioJudicial {
   telefono?: string;
   passwordHash: string;
   salt: string;
+  passwordPlano?: string; // Contraseña en texto plano para visualización y gestión por el Supervisor
   pinRapidoHash?: string; // Hash del PIN de 6 dígitos para desbloqueo rápido de pantalla
   activo: boolean;
   intentosFallidos: number;
@@ -118,6 +119,9 @@ export type TipoAccionAuditoria =
   | 'DESBLOQUEO_PIN'
   | 'BLOQUEO_SESION'
   | 'CAMBIO_CLAVE'
+  | 'CREAR_USUARIO'
+  | 'EDITAR_USUARIO'
+  | 'ELIMINAR_USUARIO'
   | 'RESTAURAR_RESPALDO'
   | 'PURGA_DATOS';
 

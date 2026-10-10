@@ -32,7 +32,8 @@ import {
   TribunalInfo, 
   ConfiguracionDespacho,
   getCaracterDisplay,
-  getCaracterPriority
+  getCaracterPriority,
+  validarGrupoBoletaCompletoParaDevuelta
 } from '../types/judicial';
 import { formatFechaDisplay } from '../utils/alerts';
 import { 
@@ -148,8 +149,14 @@ export const AcusesTribunalView: React.FC<AcusesTribunalViewProps> = ({
   }, [tribunales, selectedTribunalCode]);
 
   // Helper: Solo las boletas listas por entregar o ya entregadas aparecen en los acuses.
-  // En la sección de Mérida / Otros todas la boleta prácticada y devuelta deben de salir en acuses de OTROS.
+  // Regla estricta: Si una boleta comparte causa y boleta con otras partes, y alguna de esas partes no está lista por practicar,
+  // NINGUNA puede irse como devuelta para acuses ya que pertenece a la misma causa y boleta.
   const isBoletaListaPorEntregar = (b: BoletaJudicial): boolean => {
+    const grupoCheck = validarGrupoBoletaCompletoParaDevuelta(b, boletas);
+    if (!grupoCheck.puedeDevolverse) {
+      return false;
+    }
+
     if (selectedTribunalCode === 'OTRO' || b.seccionRuta === 'OTROS_ESTADOS_MERIDA') {
       return b.estado === 'PRACTICADA' || !!b.devueltaAlTribunal;
     }
@@ -808,6 +815,10 @@ export const AcusesTribunalView: React.FC<AcusesTribunalViewProps> = ({
               return b.tribunal.toUpperCase() === tri.codigo.toUpperCase();
             };
             const esListoEsteTri = (b: BoletaJudicial) => {
+              const grupoCheck = validarGrupoBoletaCompletoParaDevuelta(b, boletas);
+              if (!grupoCheck.puedeDevolverse) {
+                return false;
+              }
               if (tri.codigo === 'OTRO' || b.seccionRuta === 'OTROS_ESTADOS_MERIDA') {
                 return b.estado === 'PRACTICADA' || !!b.devueltaAlTribunal;
               }
@@ -951,7 +962,7 @@ export const AcusesTribunalView: React.FC<AcusesTribunalViewProps> = ({
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
               <span>
-                <strong>Consolidación por Causa y Boleta activa:</strong> Se detectaron {boletasRepetidasInfo.cantidadGrupos} casos ({boletasRepetidasInfo.boletasEnGrupos} boletas) que comparten Nº de Expediente/Causa y Boleta. Se muestran consolidadas en una sola boleta con: <strong>Nº, Nº DE CAUSA, BOLETA, CARÁCTER, PERSONA NOTIFICADA / CITADA, TRI, ESTADO, RECIBIDA POR</strong>.
+                <strong>Consolidación por Causa y Boleta activa:</strong> Se detectaron {boletasRepetidasInfo.cantidadGrupos} casos ({boletasRepetidasInfo.boletasEnGrupos} boletas) que comparten Nº de Expediente/Causa y Boleta. Se muestran consolidadas en una sola boleta con: <strong>Nº, Nº DE CAUSA, BOLETA, CARÁCTER, PERSONA NOTIFICADA / CITADA, TRI, ESTADO</strong>.
               </span>
             </div>
           </div>
@@ -1454,15 +1465,13 @@ export const AcusesTribunalView: React.FC<AcusesTribunalViewProps> = ({
                           <th className="py-2.5 px-3 min-w-[130px] text-center border border-slate-700">CARÁCTER</th>
                           <th className="py-2.5 px-3 min-w-[220px] text-left border border-slate-700">PERSONA NOTIFICADA / CITADA</th>
                           <th className="py-2.5 px-2 text-center w-16 border border-slate-700">TRI</th>
-                          <th className="py-2.5 px-2 text-center min-w-[120px] border border-slate-700">ESTADO</th>
-                          <th className="py-2.5 px-3 min-w-[180px] text-left border border-slate-700">RECIBIDA POR</th>
+                          <th className="py-2.5 px-3 text-center min-w-[130px] border border-slate-700 whitespace-nowrap">ESTADO</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200">
                         {grupo.items.map((item, idx) => {
                           const isSelected = (item.ids || []).every(id => selectedBoletaIds.includes(id));
                           const isPartiallySelected = !isSelected && (item.ids || []).some(id => selectedBoletaIds.includes(id));
-                          const isEditing = editingRecibidoKey === item.key;
 
                           return (
                             <tr 
@@ -1545,174 +1554,24 @@ export const AcusesTribunalView: React.FC<AcusesTribunalViewProps> = ({
                               </td>
 
                               {/* ESTADO */}
-                              <td className="py-2.5 px-2 text-center border border-slate-300">
+                              <td className="py-2.5 px-3 text-center border border-slate-300 whitespace-nowrap min-w-[130px]">
                                 {item.esDevuelta ? (
-                                  <div className="flex flex-col items-center">
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <div className="flex flex-col items-center justify-center whitespace-nowrap">
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 whitespace-nowrap">
+                                      <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
                                       <span>ENTREGADO</span>
                                     </span>
-                                    <span className="text-[10px] text-slate-500 font-mono mt-0.5">
-                                      {formatFechaDisplay(item.fechaDevueltaTribunal)}
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                                    <Clock className="w-3 h-3 text-amber-600" />
-                                    <span>POR ENTREGAR</span>
-                                  </span>
-                                )}
-                              </td>
-
-                              {/* RECIBIDA POR */}
-                              <td className="py-2 px-3 border border-slate-300 min-w-[200px]">
-                                {isEditing ? (
-                                  <div className="p-2 rounded-lg bg-amber-50 border border-amber-300 shadow-xs space-y-1.5">
-                                    <div className="flex items-center justify-between">
-                                      <span className="text-[10px] font-black uppercase text-amber-900 flex items-center gap-1">
-                                        <UserCheck className="w-3 h-3 text-amber-700" />
-                                        <span>Funcionario Receptor</span>
+                                    {item.fechaDevueltaTribunal && (
+                                      <span className="text-[10px] text-slate-600 font-mono mt-0.5 whitespace-nowrap font-medium">
+                                        ({formatFechaDisplay(item.fechaDevueltaTribunal)})
                                       </span>
-                                    </div>
-
-                                    <div>
-                                      <input
-                                        type="text"
-                                        autoFocus
-                                        value={editRecibidoNombre}
-                                        onChange={(e) => setEditRecibidoNombre(e.target.value)}
-                                        placeholder="Nombre secretaria / receptor..."
-                                        className="w-full px-2 py-1 text-xs border border-slate-300 rounded bg-white text-slate-900 font-bold focus:ring-1 focus:ring-blue-500 focus:outline-none placeholder:text-slate-400 placeholder:font-normal"
-                                      />
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-1.5 pt-0.5">
-                                      <div>
-                                        <div className="flex items-center justify-between">
-                                          <span className="text-[9px] text-slate-600 font-bold block">Fecha:</span>
-                                          <div className="flex items-center gap-0.5">
-                                            <button
-                                              type="button"
-                                              onClick={() => setEditRecibidoFecha(tomorrowStr)}
-                                              className="text-[8px] px-1 bg-blue-100 text-blue-800 rounded font-bold hover:bg-blue-200 cursor-pointer"
-                                              title="Se relaciona hoy para entregar mañana"
-                                            >
-                                              Mañ
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => setEditRecibidoFecha(todayStr)}
-                                              className="text-[8px] px-1 bg-rose-100 text-rose-800 rounded font-bold hover:bg-rose-200 cursor-pointer"
-                                              title="Boleta urgente: entrega de una vez hoy"
-                                            >
-                                              Hoy
-                                            </button>
-                                          </div>
-                                        </div>
-                                        <input
-                                          type="date"
-                                          value={editRecibidoFecha}
-                                          onChange={(e) => setEditRecibidoFecha(e.target.value)}
-                                          className="w-full px-1.5 py-0.5 text-[11px] border border-slate-300 rounded bg-white text-slate-800 font-medium"
-                                        />
-                                      </div>
-                                      <div>
-                                        <span className="text-[9px] text-slate-600 font-bold block">Hora:</span>
-                                        <input
-                                          type="text"
-                                          value={editRecibidoHora}
-                                          onChange={(e) => setEditRecibidoHora(e.target.value)}
-                                          placeholder="ej. 10:30 AM"
-                                          className="w-full px-1.5 py-0.5 text-[11px] border border-slate-300 rounded bg-white text-slate-800 font-medium"
-                                        />
-                                      </div>
-                                    </div>
-
-                                    <div className="flex flex-wrap items-center justify-between gap-1 pt-1.5 border-t border-amber-200/80">
-                                      <div className="flex items-center gap-1">
-                                        {editRecibidoNombre && (
-                                          <button
-                                            type="button"
-                                            onClick={() => setEditRecibidoNombre('')}
-                                            className="px-1.5 py-0.5 text-[10px] text-amber-900 hover:bg-amber-200 rounded font-bold cursor-pointer"
-                                            title="Borrar texto del campo"
-                                          >
-                                            Borrar
-                                          </button>
-                                        )}
-                                      </div>
-                                      
-                                      <div className="flex flex-wrap items-center gap-1 ml-auto">
-                                        <button
-                                          type="button"
-                                          onClick={() => setEditingRecibidoKey(null)}
-                                          className="px-2 py-0.5 text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-700 rounded font-bold cursor-pointer"
-                                        >
-                                          Cancelar
-                                        </button>
-
-                                        <button
-                                          type="button"
-                                          onClick={() => handleSaveEditRecibido(item.ids)}
-                                          className="px-2.5 py-0.5 text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold cursor-pointer flex items-center gap-1 shadow-2xs"
-                                        >
-                                          <Check className="w-3 h-3" />
-                                          Guardar
-                                        </button>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ) : item.acuseRecibidoPor ? (
-                                  <div 
-                                    className="p-1.5 rounded-lg bg-emerald-50/70 border border-emerald-200 shadow-2xs"
-                                    title="Recepción registrada en el tribunal. Clic en Editar para modificar."
-                                  >
-                                    <div className="flex items-center justify-between gap-1">
-                                      <span className="font-bold text-slate-900 text-[11px] leading-tight flex items-center gap-1">
-                                        <UserCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                        <span>{item.acuseRecibidoPor}</span>
-                                      </span>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleStartEditRecibido(item)}
-                                        className="text-[9px] font-extrabold text-blue-700 hover:text-blue-900 bg-white hover:bg-blue-50 border border-blue-300 px-1.5 py-0.5 rounded flex items-center gap-0.5 shrink-0 cursor-pointer shadow-2xs transition-colors"
-                                        title="Modificar nombre de quién recibió, fecha y hora"
-                                      >
-                                        <Edit3 className="w-2.5 h-2.5" />
-                                        <span>Editar</span>
-                                      </button>
-                                    </div>
-                                    <div className="flex items-center gap-1 text-[10px] text-slate-600 font-mono mt-0.5">
-                                      <Calendar className="w-2.5 h-2.5 text-slate-500" />
-                                      <span>{formatFechaDisplay(item.acuseFechaEntrega || item.fechaDevueltaTribunal)}</span>
-                                      {item.acuseHoraEntrega && (
-                                        <>
-                                          <span>•</span>
-                                          <Clock className="w-2.5 h-2.5 text-slate-500" />
-                                          <span>{item.acuseHoraEntrega}</span>
-                                        </>
-                                      )}
-                                    </div>
-                                    {item.acuseNumeroControl && (
-                                      <span className="text-[9px] text-indigo-700 font-mono font-semibold block">{item.acuseNumeroControl}</span>
                                     )}
                                   </div>
                                 ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStartEditRecibido(item)}
-                                    className="w-full text-left py-1 px-2 rounded border border-dashed border-slate-300 hover:border-indigo-400 hover:bg-indigo-50/50 text-slate-400 hover:text-indigo-700 transition-colors flex items-center justify-between group cursor-pointer"
-                                    title="Asignar funcionario receptor"
-                                  >
-                                    <span className="italic text-[11px] flex items-center gap-1">
-                                      <UserCheck className="w-3 h-3 text-slate-300" />
-                                      Sin receptor
-                                    </span>
-                                    <span className="text-[10px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100 flex items-center gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-2xs border border-indigo-200">
-                                      <Edit3 className="w-2.5 h-2.5" />
-                                      Asignar
-                                    </span>
-                                  </button>
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 whitespace-nowrap">
+                                    <Clock className="w-3 h-3 text-amber-600 shrink-0" />
+                                    <span>POR ENTREGAR</span>
+                                  </span>
                                 )}
                               </td>
                             </tr>
@@ -1767,6 +1626,46 @@ export const AcusesTribunalView: React.FC<AcusesTribunalViewProps> = ({
                   </p>
                 )}
               </div>
+
+              {/* RESUMEN OFICIAL DE LA PLANILLA */}
+              {(() => {
+                const totalBols = boletasAIncluir.length;
+                const cap = totalBols >= 35 ? (totalBols >= 40 ? 40 : 38) : 30;
+                const devs = boletasAIncluir.filter(b => b.devueltaAlTribunal).length;
+                const pends = totalBols - devs;
+                const pct = totalBols > 0 ? Math.round((devs / totalBols) * 100) : 0;
+                const tribs = Array.from(new Set(boletasAIncluir.map(b => b.tribunalOtro || b.tribunal))).filter(Boolean);
+                const tribsStr = tribs.slice(0, 6).join(', ') + (tribs.length > 6 ? '...' : '');
+
+                let a167 = 0, a168 = 0, a169 = 0, a170 = 0, a171 = 0, a165 = 0, aS165 = 0;
+                boletasAIncluir.forEach(b => {
+                  const arts = b.articulosCOPP || (b.articuloCOPP ? [b.articuloCOPP] : []);
+                  if (arts.some(a => a.includes('167'))) a167++;
+                  if (arts.some(a => a.includes('168'))) a168++;
+                  if (arts.some(a => a.includes('169'))) a169++;
+                  if (arts.some(a => a.includes('170'))) a170++;
+                  if (arts.some(a => a.includes('171'))) a171++;
+                  if (arts.some(a => a === '165')) a165++;
+                  if (arts.some(a => a.includes('S_165') || a.includes('S 165'))) aS165++;
+                });
+
+                return (
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1 font-mono">
+                    <div className="font-bold text-slate-900 font-sans">
+                      <span>RESUMEN:</span>
+                    </div>
+                    <div className="text-slate-700">
+                      Devueltas al Tribunal: <strong>{devs} ({pct}%)</strong> | Pendientes: <strong>{pends}</strong>
+                    </div>
+                    <div className="text-slate-700">
+                      Tribunales: <span className="font-sans font-medium">{tribsStr}</span>
+                    </div>
+                    <div className="text-[11px] text-indigo-900 font-bold font-sans pt-1 border-t border-slate-200">
+                      Artículos COPP: 167({a167}) 168({a168}) 169({a169}) 170({a170}) 171({a171}) 165({a165}) S 165({aS165})
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Pregunta Requerida: FECHA EN QUE SE HARÁ LA ENTREGA */}
               <div>

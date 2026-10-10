@@ -38,8 +38,8 @@ export const ImprimirHojasModal: React.FC<ImprimirHojasModalProps> = ({
   filtroTribunal,
   idInicial: idInicialProp,
 }) => {
-  // Capacidad por hoja (por defecto 30 boletas para llenar 1 hoja completa)
-  const [capacidadPorHoja, setCapacidadPorHoja] = useState<number>(30);
+  // Capacidad por hoja (por defecto 40 boletas - capacidad máxima calculada para Hoja Oficio)
+  const [capacidadPorHoja, setCapacidadPorHoja] = useState<number>(40);
   // Identificador inicial UAC para las hojas (ejemplo reglamentario: uac0001)
   const [idInicial, setIdInicial] = useState<string>(() => {
     if (idInicialProp) return idInicialProp;
@@ -224,10 +224,11 @@ export const ImprimirHojasModal: React.FC<ImprimirHojasModalProps> = ({
                 onChange={(e) => setCapacidadPorHoja(Number(e.target.value))}
                 className="font-bold text-slate-900 bg-transparent focus:outline-none cursor-pointer text-xs"
               >
-                <option value={30}>30 Boletas (Reglamentario / 1 Hoja Llena)</option>
+                <option value={40}>40 Boletas (Capacidad Máxima Hoja Oficio)</option>
+                <option value={38}>38 Boletas</option>
+                <option value={35}>35 Boletas</option>
+                <option value={30}>30 Boletas</option>
                 <option value={20}>20 Boletas</option>
-                <option value={15}>15 Boletas</option>
-                <option value={10}>10 Boletas</option>
               </select>
             </div>
 
@@ -345,9 +346,6 @@ export const ImprimirHojasModal: React.FC<ImprimirHojasModalProps> = ({
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-slate-900 text-xs">
                               Hoja {hoja.numeroHoja}
-                            </span>
-                            <span className="text-[11px] text-slate-400 font-normal">
-                              (Folio {hoja.numeroHoja} de {totalHojas})
                             </span>
                           </div>
                           <p className="text-[11px] text-slate-500">

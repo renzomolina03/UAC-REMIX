@@ -50,6 +50,7 @@ import {
   toggleArticuloBoleta,
   getCaracterDisplay,
   validarRequisitosDevuelta,
+  validarGrupoBoletaCompletoParaDevuelta,
   TipoCitado,
   TIPOS_CITADO_OPTIONS,
   detectCaracterFromText,
@@ -142,8 +143,6 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
   const [selectedSeccion, setSelectedSeccion] = useState<string>('TODAS');
   const [selectedTribunal, setSelectedTribunal] = useState('TODOS');
   const [selectedAlguacil, setSelectedAlguacil] = useState('TODOS');
-  const [selectedFecha, setSelectedFecha] = useState<string>('TODAS');
-  const [agruparPorFecha, setAgruparPorFecha] = useState<boolean>(false);
   const [selectedBoletaIds, setSelectedBoletaIds] = useState<string[]>([]);
   const [bulkCaracterFeedback, setBulkCaracterFeedback] = useState<string | null>(null);
   const [sortField, setSortField] = useState<'item' | 'audiencia'>('item');
@@ -292,6 +291,21 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
     setSeccionAEditar(null);
   };
 
+  // Helper para obtener información completa y actualizada de cualquier sección (estándar o personalizada)
+  const getSeccionInfo = (codigo: string): SeccionTrabajoInfo => {
+    const custom = seccionesCustom.find(s => s.codigo === codigo);
+    if (custom) return custom;
+    if (SECCIONES_INFO[codigo]) return SECCIONES_INFO[codigo];
+    return {
+      codigo,
+      nombre: codigo,
+      corto: codigo,
+      descripcion: `Sección de trabajo: ${codigo}`,
+      color: '#2563EB',
+      badgeBg: 'bg-blue-100 text-blue-900',
+    };
+  };
+
   // Handler para imprimir boletas seleccionadas en formato de listado
   const handlePrintBoletasSeleccionadas = () => {
     const seleccionadas = boletas.filter(b => selectedBoletaIds.includes(b.id));
@@ -321,7 +335,8 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
     );
   };
 
-  // Validación estricta: No permitir marcar SÍ en Devuelta sin Artículo y Alguacil asignados
+  // Validación estricta: No permitir marcar SÍ en Devuelta sin Artículo y Alguacil asignados,
+  // y asegurar que si comparte causa y boleta con otras partes citadas, todas estén practicadas.
   const handleToggleDevueltaRow = (b: BoletaJudicial) => {
     if (!b.devueltaAlTribunal) {
       const check = validarRequisitosDevuelta(b);
@@ -329,8 +344,12 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
         alert(check.mensajeError);
         return;
       }
+      const checkGrupo = validarGrupoBoletaCompletoParaDevuelta(b, boletas);
+      if (!checkGrupo.puedeDevolverse) {
+        alert(checkGrupo.mensajeError);
+        return;
+      }
       onToggleDevuelta(b.id, true);
-      // Cuando se seleccione en PENDIENTE para devolver al tribunal NO pregunte Recibida en Tribunal por
     } else {
       onToggleDevuelta(b.id, false);
     }
@@ -443,7 +462,7 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
       const matchSeccion = selectedSeccion === 'TODAS' || sec === selectedSeccion;
 
       const itemNumber = b.numeroItem !== undefined ? b.numeroItem : (idx + 1);
-      const hojaAsignada = Math.ceil(itemNumber / 30);
+      const hojaAsignada = Math.ceil(itemNumber / 40);
 
       let matchHoja = false;
       if (targetHojaNum !== null && hojaAsignada === targetHojaNum) {
@@ -496,39 +515,31 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
         selectedAlguacil === 'TODOS' || b.alguacilPractica === selectedAlguacil;
 
       let matchAlerta = true;
-      if (filterSoloUrgentes) {
+      if (filterSoloUrgentes || filtroAlertaActivo === 'CRITICA' || filtroAlertaActivo === 'URGENTE') {
         const urg = esBoletaUrgente(b);
         const alerta = evaluarAlertaBoleta(b);
-        matchAlerta = (urg.esUrgente || alerta.nivel === 'URGENTE' || alerta.nivel === 'CRITICA' || !!b.esUrgente) && !b.devueltaAlTribunal;
-      } else if (filtroAlertaActivo && filtroAlertaActivo !== 'TODAS') {
-        const alerta = evaluarAlertaBoleta(b);
-        const urg = esBoletaUrgente(b);
-        if (filtroAlertaActivo === 'CRITICA') matchAlerta = alerta.nivel === 'CRITICA' || urg.motivo.toLowerCase().includes('hoy');
-        else if (filtroAlertaActivo === 'URGENTE') matchAlerta = alerta.nivel === 'URGENTE' || urg.esUrgente;
-        else if (filtroAlertaActivo === 'DEVUELTA') matchAlerta = b.devueltaAlTribunal;
+        const esUrg = urg.esUrgente || alerta.nivel === 'CRITICA' || alerta.nivel === 'URGENTE' || !!b.esUrgente;
+        matchAlerta = esUrg && !b.devueltaAlTribunal;
+      } else if (filtroAlertaActivo === 'DEVUELTA') {
+        matchAlerta = b.devueltaAlTribunal;
       }
 
-      const matchFecha =
-        selectedFecha === 'TODAS' ||
-        b.fechaAsignacion === selectedFecha ||
-        b.fechaAudiencia === selectedFecha;
-
-      return matchDependencia && matchSeccion && matchSearch && matchTribunal && matchAlguacil && matchFecha && matchAlerta;
+      return matchDependencia && matchSeccion && matchSearch && matchTribunal && matchAlguacil && matchAlerta;
     }).sort((a, b) => {
       let cmp = 0;
       if (sortField === 'item') cmp = a.numeroItem - b.numeroItem;
       else if (sortField === 'audiencia') cmp = (a.fechaAudiencia || '').localeCompare(b.fechaAudiencia || '');
       return sortDirection === 'asc' ? cmp : -cmp;
     });
-  }, [boletas, searchTerm, selectedSeccion, selectedTribunal, selectedAlguacil, selectedFecha, filtroAlertaActivo, filterSoloUrgentes, sortField, sortDirection, dependenciaActiva]);
+  }, [boletas, searchTerm, selectedSeccion, selectedTribunal, selectedAlguacil, filtroAlertaActivo, filterSoloUrgentes, sortField, sortDirection, dependenciaActiva]);
 
-  // Cálculo de hojas del lote (30 boletas por hoja física) con UAC empezando desde 0001
+  // Cálculo de hojas del lote (40 boletas por hoja física - capacidad máxima óptima) con UAC empezando desde 0001
   const hojasCalculadas = useMemo(() => {
-    return calcularHojasLote(boletasFiltradas, 30, idInicialUAC);
+    return calcularHojasLote(boletasFiltradas, 40, idInicialUAC);
   }, [boletasFiltradas, idInicialUAC]);
 
   const mapaBoletasHojas = useMemo(() => {
-    return mapearBoletasAHojas(boletasFiltradas, 30, idInicialUAC);
+    return mapearBoletasAHojas(boletasFiltradas, 40, idInicialUAC);
   }, [boletasFiltradas, idInicialUAC]);
 
   // Objeto de la hoja seleccionada actualmente
@@ -551,48 +562,6 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
       return hojaObj ? hojaObj.boletas : [];
     }
   }, [boletasFiltradas, selectedHojaFilter, hojaFilterMode, hojasCalculadas]);
-
-  // Fechas únicas para filtrado y separación de listados por fecha
-  const distinctFechas = useMemo(() => {
-    const datesMap = new Map<string, number>();
-    boletas.forEach(b => {
-      const fecha = b.fechaAsignacion || (b.fechaAudiencia !== 'NOTIFICACION' ? b.fechaAudiencia : '');
-      if (fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
-        datesMap.set(fecha, (datesMap.get(fecha) || 0) + 1);
-      }
-    });
-    return Array.from(datesMap.entries()).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [boletas]);
-
-  // Agrupación de boletas por fecha para el modo "Listados por Fecha (No todo junto)"
-  const gruposPorFecha = useMemo(() => {
-    if (!agruparPorFecha) return null;
-    const groups = new Map<string, BoletaJudicial[]>();
-    boletasAMostrarEnTabla.forEach(b => {
-      const fechaKey = b.fechaAsignacion || (b.fechaAudiencia !== 'NOTIFICACION' ? b.fechaAudiencia : '') || 'SIN_FECHA';
-      const list = groups.get(fechaKey) || [];
-      list.push(b);
-      groups.set(fechaKey, list);
-    });
-    return Array.from(groups.entries()).sort((a, b) => {
-      if (a[0] === 'SIN_FECHA') return 1;
-      if (b[0] === 'SIN_FECHA') return -1;
-      return b[0].localeCompare(a[0]);
-    });
-  }, [agruparPorFecha, boletasAMostrarEnTabla]);
-
-  const handlePrintGrupoFecha = (fechaKey: string, boletasGrupo: BoletaJudicial[]) => {
-    exportarBoletasPDF(
-      boletasGrupo,
-      config,
-      selectedTribunal !== 'TODOS' ? selectedTribunal : undefined,
-      {
-        capacidadPorHoja: 30,
-        idInicial: idInicialUAC,
-        seccion: selectedSeccion !== 'TODAS' ? selectedSeccion : undefined,
-      }
-    );
-  };
 
   const handleBulkAssignCaracter = (boletaIds: string[], caracter: TipoCitado) => {
     if (onBulkAssignCaracter) {
@@ -824,6 +793,23 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Opción para renombrar la Sección de Trabajo activa */}
+            {selectedSeccion !== 'TODAS' && (
+              <button
+                id="btn-renombrar-seccion-actual"
+                type="button"
+                onClick={() => {
+                  setSeccionAEditar(getSeccionInfo(selectedSeccion));
+                  setIsModalCrearSeccionOpen(true);
+                }}
+                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 cursor-pointer transition-all border border-slate-300 shadow-2xs"
+                title="Renombrar la sección de trabajo actualmente seleccionada"
+              >
+                <Pencil className="w-3.5 h-3.5 text-slate-600" />
+                <span>Renombrar Sección</span>
+              </button>
+            )}
+
             {/* Opción para crear Sección de Trabajo personalizada con diseño elegante */}
             <button
               id="btn-crear-seccion-trabajo"
@@ -862,116 +848,209 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-1.5">
-          <button
-            onClick={() => setSelectedSeccion('TODAS')}
-            className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-              selectedSeccion === 'TODAS'
-                ? 'bg-[#0053D5] text-white shadow-xs font-black'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-            }`}
-          >
-            <span>TODAS</span>
-            <span className="text-[11px] px-1.5 py-0.2 rounded bg-white/20 font-black">{conteoSecciones['TODAS']}</span>
-          </button>
+        {(() => {
+          const sec1 = getSeccionInfo('RUTA_NOTIFICACION_CITACION');
+          const sec2 = getSeccionInfo('CORREO_EXT');
+          const sec3 = getSeccionInfo('RUTA_INTERNA');
+          const sec4 = getSeccionInfo('OTROS_ESTADOS_MERIDA');
+          const sec5 = getSeccionInfo('SOBRESEIMIENTO');
+          const codigosEstandar = ['RUTA_NOTIFICACION_CITACION', 'CORREO_EXT', 'RUTA_INTERNA', 'OTROS_ESTADOS_MERIDA', 'SOBRESEIMIENTO'];
 
-          <button
-            onClick={() => setSelectedSeccion('RUTA_NOTIFICACION_CITACION')}
-            className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-              selectedSeccion === 'RUTA_NOTIFICACION_CITACION'
-                ? 'bg-blue-700 text-white shadow-xs'
-                : 'bg-blue-50 hover:bg-blue-100 text-blue-900'
-            }`}
-          >
-            <span className="truncate">1. Notif. y Citación</span>
-            <span className="text-[11px] px-1.5 py-0.2 rounded bg-black/20 font-black">{conteoSecciones['RUTA_NOTIFICACION_CITACION']}</span>
-          </button>
+          return (
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                onClick={() => setSelectedSeccion('TODAS')}
+                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                  selectedSeccion === 'TODAS'
+                    ? 'bg-[#0053D5] text-white shadow-xs font-black'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
+              >
+                <span>TODAS</span>
+                <span className="text-[11px] px-1.5 py-0.2 rounded bg-white/20 font-black">{conteoSecciones['TODAS']}</span>
+              </button>
 
-          <button
-            onClick={() => setSelectedSeccion('CORREO_EXT')}
-            className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-              selectedSeccion === 'CORREO_EXT'
-                ? 'bg-sky-700 text-white shadow-xs'
-                : 'bg-sky-50 hover:bg-sky-100 text-sky-900'
-            }`}
-          >
-            <span className="truncate">2. Correo Ext.</span>
-            <span className="text-[11px] px-1.5 py-0.2 rounded bg-black/20 font-black">{conteoSecciones['CORREO_EXT']}</span>
-          </button>
-
-          <button
-            onClick={() => setSelectedSeccion('RUTA_INTERNA')}
-            className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-              selectedSeccion === 'RUTA_INTERNA'
-                ? 'bg-emerald-700 text-white shadow-xs'
-                : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900'
-            }`}
-          >
-            <span className="truncate">3. Ruta Interna</span>
-            <span className="text-[11px] px-1.5 py-0.2 rounded bg-black/20 font-black">{conteoSecciones['RUTA_INTERNA']}</span>
-          </button>
-
-          <button
-            onClick={() => setSelectedSeccion('OTROS_ESTADOS_MERIDA')}
-            className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-              selectedSeccion === 'OTROS_ESTADOS_MERIDA'
-                ? 'bg-amber-700 text-white shadow-xs'
-                : 'bg-amber-50 hover:bg-amber-100 text-amber-900'
-            }`}
-          >
-            <span className="truncate">4. Mérida / Otros</span>
-            <span className="text-[11px] px-1.5 py-0.2 rounded bg-black/20 font-black">{conteoSecciones['OTROS_ESTADOS_MERIDA']}</span>
-          </button>
-
-          <button
-            onClick={() => setSelectedSeccion('SOBRESEIMIENTO')}
-            className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-              selectedSeccion === 'SOBRESEIMIENTO'
-                ? 'bg-purple-700 text-white shadow-xs'
-                : 'bg-purple-50 hover:bg-purple-100 text-purple-900'
-            }`}
-          >
-            <span className="truncate">5. Sobreseimiento</span>
-            <span className="text-[11px] px-1.5 py-0.2 rounded bg-black/20 font-black">{conteoSecciones['SOBRESEIMIENTO'] || 0}</span>
-          </button>
-
-          {/* Secciones personalizadas creadas por el usuario */}
-          {seccionesCustom.map(sec => {
-            const isSelected = selectedSeccion === sec.codigo;
-            return (
-              <div key={sec.codigo} className="inline-flex items-center">
+              {/* 1. Notif. y Citación */}
+              <div className="inline-flex items-center">
                 <button
-                  type="button"
-                  onClick={() => setSelectedSeccion(sec.codigo)}
-                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer border ${
-                    isSelected
-                      ? 'bg-[#0053D5] text-white border-blue-400 shadow-xs ring-1 ring-blue-300 font-black'
-                      : 'bg-slate-50 hover:bg-slate-100 text-slate-800 border-slate-200'
+                  onClick={() => setSelectedSeccion('RUTA_NOTIFICACION_CITACION')}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                    selectedSeccion === 'RUTA_NOTIFICACION_CITACION'
+                      ? 'bg-blue-700 text-white shadow-xs'
+                      : 'bg-blue-50 hover:bg-blue-100 text-blue-900'
                   }`}
-                  title={sec.descripcion || sec.nombre}
+                  title={sec1.descripcion || sec1.nombre}
                 >
-                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: sec.colorHex || '#2563EB' }} />
-                  <span className="truncate">{sec.nombre}</span>
-                  <span className={`text-[11px] px-1.5 py-0.2 rounded font-black ${isSelected ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'}`}>
-                    {conteoSecciones[sec.codigo] || 0}
-                  </span>
+                  <span className="truncate">{sec1.corto || sec1.nombre}</span>
+                  <span className="text-[11px] px-1.5 py-0.2 rounded bg-black/20 font-black">{conteoSecciones['RUTA_NOTIFICACION_CITACION']}</span>
                 </button>
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSeccionAEditar(sec);
+                    setSeccionAEditar(sec1);
                     setIsModalCrearSeccionOpen(true);
                   }}
                   className="ml-0.5 p-1 text-slate-400 hover:text-blue-700 hover:bg-blue-50 rounded cursor-pointer transition-colors"
-                  title={`Renombrar o modificar sección "${sec.nombre}"`}
+                  title={`Renombrar sección "${sec1.nombre}"`}
                 >
                   <Pencil className="w-3 h-3" />
                 </button>
               </div>
-            );
-          })}
-        </div>
+
+              {/* 2. Correo Ext. */}
+              <div className="inline-flex items-center">
+                <button
+                  onClick={() => setSelectedSeccion('CORREO_EXT')}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                    selectedSeccion === 'CORREO_EXT'
+                      ? 'bg-sky-700 text-white shadow-xs'
+                      : 'bg-sky-50 hover:bg-sky-100 text-sky-900'
+                  }`}
+                  title={sec2.descripcion || sec2.nombre}
+                >
+                  <span className="truncate">{sec2.corto || sec2.nombre}</span>
+                  <span className="text-[11px] px-1.5 py-0.2 rounded bg-black/20 font-black">{conteoSecciones['CORREO_EXT']}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSeccionAEditar(sec2);
+                    setIsModalCrearSeccionOpen(true);
+                  }}
+                  className="ml-0.5 p-1 text-slate-400 hover:text-sky-700 hover:bg-sky-50 rounded cursor-pointer transition-colors"
+                  title={`Renombrar sección "${sec2.nombre}"`}
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              </div>
+
+              {/* 3. Ruta Interna */}
+              <div className="inline-flex items-center">
+                <button
+                  onClick={() => setSelectedSeccion('RUTA_INTERNA')}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                    selectedSeccion === 'RUTA_INTERNA'
+                      ? 'bg-emerald-700 text-white shadow-xs'
+                      : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900'
+                  }`}
+                  title={sec3.descripcion || sec3.nombre}
+                >
+                  <span className="truncate">{sec3.corto || sec3.nombre}</span>
+                  <span className="text-[11px] px-1.5 py-0.2 rounded bg-black/20 font-black">{conteoSecciones['RUTA_INTERNA']}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSeccionAEditar(sec3);
+                    setIsModalCrearSeccionOpen(true);
+                  }}
+                  className="ml-0.5 p-1 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded cursor-pointer transition-colors"
+                  title={`Renombrar sección "${sec3.nombre}"`}
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              </div>
+
+              {/* 4. Mérida / Otros */}
+              <div className="inline-flex items-center">
+                <button
+                  onClick={() => setSelectedSeccion('OTROS_ESTADOS_MERIDA')}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                    selectedSeccion === 'OTROS_ESTADOS_MERIDA'
+                      ? 'bg-amber-700 text-white shadow-xs'
+                      : 'bg-amber-50 hover:bg-amber-100 text-amber-900'
+                  }`}
+                  title={sec4.descripcion || sec4.nombre}
+                >
+                  <span className="truncate">{sec4.corto || sec4.nombre}</span>
+                  <span className="text-[11px] px-1.5 py-0.2 rounded bg-black/20 font-black">{conteoSecciones['OTROS_ESTADOS_MERIDA']}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSeccionAEditar(sec4);
+                    setIsModalCrearSeccionOpen(true);
+                  }}
+                  className="ml-0.5 p-1 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded cursor-pointer transition-colors"
+                  title={`Renombrar sección "${sec4.nombre}"`}
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              </div>
+
+              {/* 5. Sobreseimiento */}
+              <div className="inline-flex items-center">
+                <button
+                  onClick={() => setSelectedSeccion('SOBRESEIMIENTO')}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                    selectedSeccion === 'SOBRESEIMIENTO'
+                      ? 'bg-purple-700 text-white shadow-xs'
+                      : 'bg-purple-50 hover:bg-purple-100 text-purple-900'
+                  }`}
+                  title={sec5.descripcion || sec5.nombre}
+                >
+                  <span className="truncate">{sec5.corto || sec5.nombre}</span>
+                  <span className="text-[11px] px-1.5 py-0.2 rounded bg-black/20 font-black">{conteoSecciones['SOBRESEIMIENTO'] || 0}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSeccionAEditar(sec5);
+                    setIsModalCrearSeccionOpen(true);
+                  }}
+                  className="ml-0.5 p-1 text-slate-400 hover:text-purple-700 hover:bg-purple-50 rounded cursor-pointer transition-colors"
+                  title={`Renombrar sección "${sec5.nombre}"`}
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              </div>
+
+              {/* Secciones personalizadas creadas por el usuario (excluye estándares para no duplicar) */}
+              {seccionesCustom
+                .filter(sec => !codigosEstandar.includes(sec.codigo))
+                .map(sec => {
+                  const isSelected = selectedSeccion === sec.codigo;
+                  return (
+                    <div key={sec.codigo} className="inline-flex items-center">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSeccion(sec.codigo)}
+                        className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer border ${
+                          isSelected
+                            ? 'bg-[#0053D5] text-white border-blue-400 shadow-xs ring-1 ring-blue-300 font-black'
+                            : 'bg-slate-50 hover:bg-slate-100 text-slate-800 border-slate-200'
+                        }`}
+                        title={sec.descripcion || sec.nombre}
+                      >
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: sec.colorHex || '#2563EB' }} />
+                        <span className="truncate">{sec.nombre}</span>
+                        <span className={`text-[11px] px-1.5 py-0.2 rounded font-black ${isSelected ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                          {conteoSecciones[sec.codigo] || 0}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSeccionAEditar(sec);
+                          setIsModalCrearSeccionOpen(true);
+                        }}
+                        className="ml-0.5 p-1 text-slate-400 hover:text-blue-700 hover:bg-blue-50 rounded cursor-pointer transition-colors"
+                        title={`Renombrar o modificar sección "${sec.nombre}"`}
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+            </div>
+          );
+        })()}
       </div>
 
       {/* BARRA DE AGREGAR RÁPIDO (SUPER FÁCIL) */}
@@ -1129,57 +1208,6 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
                 ))}
               </select>
             </div>
-
-            {/* Filtro por Fecha (Listados por Fecha) */}
-            <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs shadow-2xs">
-              <Calendar className="w-3.5 h-3.5 text-indigo-600 mr-1.5 shrink-0" />
-              <span className="text-slate-500 font-bold mr-1.5">Fecha:</span>
-              <select
-                value={selectedFecha}
-                onChange={(e) => setSelectedFecha(e.target.value)}
-                className="bg-transparent font-black text-slate-800 focus:outline-none cursor-pointer max-w-[150px]"
-                title="Filtrar por fecha específica (Asignación o Audiencia)"
-              >
-                <option value="TODAS">Todas las fechas</option>
-                {distinctFechas.map(([f, count]) => (
-                  <option key={`distinct-fecha-${f}`} value={f}>
-                    {formatFechaDisplay(f)} ({count})
-                  </option>
-                ))}
-              </select>
-              <input
-                type="date"
-                value={selectedFecha !== 'TODAS' ? selectedFecha : ''}
-                onChange={(e) => setSelectedFecha(e.target.value || 'TODAS')}
-                className="ml-1 text-[11px] font-semibold text-slate-700 bg-white border border-slate-300 rounded px-1 py-0.5 cursor-pointer"
-                title="Seleccionar fecha en el calendario"
-              />
-              {selectedFecha !== 'TODAS' && (
-                <button
-                  type="button"
-                  onClick={() => setSelectedFecha('TODAS')}
-                  className="ml-1 text-slate-400 hover:text-slate-700 text-xs cursor-pointer font-bold px-1"
-                  title="Restablecer a todas las fechas"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-
-            {/* Botón Separar Listados por Fecha (No todo junto) */}
-            <button
-              type="button"
-              onClick={() => setAgruparPorFecha(!agruparPorFecha)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer border ${
-                agruparPorFecha
-                  ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs ring-2 ring-indigo-300'
-                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200'
-              }`}
-              title="Separar el listado por fechas individuales para no ver todo junto en el sistema"
-            >
-              <Calendar className="w-3.5 h-3.5 text-current" />
-              <span>{agruparPorFecha ? '✓ Separado por Fechas' : '📅 Separar por Fecha (No todo junto)'}</span>
-            </button>
 
             {/* Botón Filtro Boletas Urgentes */}
             <button
@@ -1782,7 +1810,7 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
             </div>
 
             <span className="px-2.5 py-0.5 rounded-full bg-white/20 text-white font-bold border border-white/30 text-[11px]">
-              {hojasCalculadas.length} {hojasCalculadas.length === 1 ? 'Hoja' : 'Hojas'} ({boletasFiltradas.length} boletas • 30 por hoja)
+              {hojasCalculadas.length} {hojasCalculadas.length === 1 ? 'Hoja' : 'Hojas'} ({boletasFiltradas.length} boletas • 40 máx. por hoja)
             </span>
 
             {/* Selector de Modo: Todas con Separadores vs Filtrar Hoja Individual */}
@@ -2012,11 +2040,11 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
               </span>
               <span className="text-slate-400">•</span>
               <span className="font-bold text-indigo-300">
-                Límite físico: 30 boletas
+                Límite físico: {currentHojaObj.capacidad} boletas
               </span>
               <span className="text-slate-400">•</span>
               <span className="font-semibold text-slate-300">
-                Trabajadas: <strong className="text-white">{currentHojaObj.cantidad} de 30</strong>
+                Trabajadas: <strong className="text-white">{currentHojaObj.cantidad} de {currentHojaObj.capacidad}</strong>
               </span>
               {currentHojaObj.fechaAsignacion && (
                 <>
@@ -2034,11 +2062,11 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
               <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold">
                 {(currentHojaObj.boletas || []).some(b => b.finDePagina)
                   ? `✓ Página finalizada manualmente (${currentHojaObj.cantidad} boletas)`
-                  : '✓ Límite de 30 alcanzado (Página completa)'}
+                  : `✓ Límite de ${currentHojaObj.capacidad} alcanzado (Página completa)`}
               </span>
             ) : (
               <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold">
-                ⚡ Trabajadas {currentHojaObj.cantidad}/30 (Restan {currentHojaObj.capacidad - currentHojaObj.cantidad} para alcanzar el límite)
+                ⚡ Trabajadas {currentHojaObj.cantidad}/{currentHojaObj.capacidad} (Restan {currentHojaObj.capacidad - currentHojaObj.cantidad} para alcanzar el límite)
               </span>
             )}
 
@@ -2124,9 +2152,6 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
                   </div>
                 </th>
 
-                <th className="py-3 px-2 text-center min-w-[90px] text-slate-300 border border-slate-700">
-                  FECHA DE ASIGNACION
-                </th>
                 <th className="py-3 px-2 text-center w-12 border border-slate-700">TRI</th>
 
                 {/* 7 Columnas COPP idénticas a la imagen con bordes marcados */}
@@ -2292,34 +2317,34 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
                               <span className="font-bold text-slate-800">
                                 {formatFechaDisplay(b.fechaAudiencia)}
                               </span>
-                              {urgencia.esUrgente && !b.devueltaAlTribunal ? (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setFilterSoloUrgentes(true);
-                                    setSelectedHojaFilter(null);
-                                    setSelectedSeccion('TODAS');
-                                    setSelectedTribunal('TODOS');
-                                    setSelectedAlguacil('TODOS');
-                                  }}
-                                  className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500 hover:bg-amber-600 text-white font-black flex items-center gap-0.5 shadow-xs animate-pulse tracking-tight cursor-pointer transition-transform hover:scale-105"
-                                  title={`Bol. Urgente: ${urgencia.motivo}. Clic para filtrar solo urgentes.`}
-                                >
-                                  ⚡ Bol. Urgente
-                                </button>
-                              ) : alerta.nivel === 'CRITICA' ? (
-                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-rose-100 text-rose-800 font-bold">
-                                  ¡Hoy / Urgente!
-                                </span>
+                              {(urgencia.esUrgente || !!b.esUrgente || alerta.nivel === 'CRITICA') ? (
+                                b.devueltaAlTribunal ? (
+                                  <span
+                                    className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-900 font-bold border border-amber-300 flex items-center gap-0.5 tracking-tight shadow-2xs"
+                                    title={`Bol. Urgente: ${urgencia.motivo || 'Urgente'} - Ya Devuelta al Tribunal`}
+                                  >
+                                    ⚡ Bol. Urgente
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setFilterSoloUrgentes(true);
+                                      setSelectedHojaFilter(null);
+                                      setSelectedSeccion('TODAS');
+                                      setSelectedTribunal('TODOS');
+                                      setSelectedAlguacil('TODOS');
+                                    }}
+                                    className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500 hover:bg-amber-600 text-white font-black flex items-center gap-0.5 shadow-xs animate-pulse tracking-tight cursor-pointer transition-transform hover:scale-105"
+                                    title={`Bol. Urgente: ${urgencia.motivo || 'Urgente'}. Clic para filtrar solo urgentes.`}
+                                  >
+                                    ⚡ Bol. Urgente
+                                  </button>
+                                )
                               ) : null}
                             </div>
                           )}
-                        </td>
-
-                        {/* FECHA DE ASIGNACIÓN */}
-                        <td className="py-2.5 px-2 text-center text-slate-700 font-medium border border-slate-300 whitespace-nowrap">
-                          {formatFechaDisplay(b.fechaAsignacion)}
                         </td>
 
                         {/* TRIBUNAL (CON ESPECIFICACIÓN CUANDO ES OTRO / FORÁNEO) */}
@@ -2499,6 +2524,20 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
                         <td className="py-2.5 px-2 text-center border border-slate-300 whitespace-nowrap">
                           {(() => {
                             const req = validarRequisitosDevuelta(b);
+                            const grupoCheck = b.devueltaAlTribunal ? null : validarGrupoBoletaCompletoParaDevuelta(b, boletas);
+                            const tieneHermanasIncompletas = !b.devueltaAlTribunal && req.puedeSerDevuelta && grupoCheck && !grupoCheck.puedeDevolverse;
+
+                            let btnTitle = '';
+                            if (b.devueltaAlTribunal) {
+                              btnTitle = 'Clic para cambiar a Pendiente';
+                            } else if (!req.puedeSerDevuelta) {
+                              btnTitle = req.mensajeError.replace(/\n/g, ' ');
+                            } else if (tieneHermanasIncompletas && grupoCheck) {
+                              btnTitle = grupoCheck.mensajeError.replace(/\n/g, ' ');
+                            } else {
+                              btnTitle = 'Clic para marcar como Devuelta (SÍ)';
+                            }
+
                             return (
                               <div className="flex flex-col items-center gap-0.5">
                                 <button
@@ -2509,18 +2548,23 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
                                       ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
                                       : !req.puedeSerDevuelta
                                         ? 'bg-slate-100 hover:bg-amber-100 text-slate-500 border border-slate-300 hover:border-amber-400'
-                                        : 'bg-amber-100 hover:bg-emerald-100 text-amber-900 border border-amber-300 hover:border-emerald-400'
+                                        : tieneHermanasIncompletas
+                                          ? 'bg-orange-100 hover:bg-orange-200 text-orange-950 border border-orange-300'
+                                          : 'bg-amber-100 hover:bg-emerald-100 text-amber-900 border border-amber-300 hover:border-emerald-400'
                                   }`}
-                                  title={
-                                    b.devueltaAlTribunal
-                                      ? 'Clic para cambiar a Pendiente'
-                                      : !req.puedeSerDevuelta
-                                        ? req.mensajeError.replace(/\n/g, ' ')
-                                        : 'Clic para marcar como Devuelta (SÍ)'
-                                  }
+                                  title={btnTitle}
                                 >
-                                  {b.devueltaAlTribunal ? '✓ DEVUELTA' : '⏳ PENDIENTE'}
+                                  {b.devueltaAlTribunal 
+                                    ? '✓ DEVUELTA' 
+                                    : tieneHermanasIncompletas 
+                                      ? '⏳ INCOMPLETA' 
+                                      : '⏳ PENDIENTE'}
                                 </button>
+                                {tieneHermanasIncompletas && grupoCheck && (
+                                  <span className="text-[8.5px] text-orange-700 font-bold max-w-[130px] truncate leading-tight" title={btnTitle}>
+                                    Falta: {grupoCheck.boletasFaltantes.map(f => f.notificadoCitado || getCaracterDisplay(f.tipoCitado)).join(', ')}
+                                  </span>
+                                )}
                                 {b.devueltaAlTribunal ? (
                                   <div className="text-center text-[10px] leading-tight flex flex-col items-center w-full mt-1">
                                     <span className="font-extrabold text-emerald-800 block text-[9px] uppercase tracking-wide">
@@ -2616,60 +2660,8 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
                     );
                   };
 
-                  if (agruparPorFecha && gruposPorFecha && gruposPorFecha.length > 0) {
-                    return (
-                      <>
-                        {gruposPorFecha.map(([fechaKey, boletasGrupo]) => (
-                          <React.Fragment key={`grupo-fecha-${fechaKey}`}>
-                            {/* Fila Encabezado de la Fecha - Destacada e Institucional */}
-                            <tr className="bg-gradient-to-r from-[#006DEB] via-[#0053D5] to-[#003EA7] text-white border-y-2 border-blue-400 sticky top-0 z-10 shadow-xs">
-                              <td colSpan={18} className="py-2.5 px-3">
-                                <div className="flex flex-wrap items-center justify-between gap-2.5">
-                                  <div className="flex items-center gap-2">
-                                    <Calendar className="w-4 h-4 text-blue-200 shrink-0" />
-                                    <span className="font-black text-xs uppercase tracking-wider">
-                                      {fechaKey === 'SIN_FECHA' ? 'BOLETAS SIN FECHA REGISTRADA' : `LISTADO POR FECHA: ${formatFechaDisplay(fechaKey)}`}
-                                    </span>
-                                    <span className="px-2 py-0.5 rounded-full bg-white/20 text-white text-[11px] font-black border border-white/30 shadow-2xs">
-                                      {boletasGrupo.length} {boletasGrupo.length === 1 ? 'boleta' : 'boletas'}
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => handlePrintGrupoFecha(fechaKey, boletasGrupo)}
-                                      className="px-3 py-1 bg-white hover:bg-slate-100 text-[#004BB4] rounded-lg font-black text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors border border-blue-200"
-                                      title={`Imprimir únicamente el listado del ${formatFechaDisplay(fechaKey)} (${boletasGrupo.length} boletas)`}
-                                    >
-                                      <Printer className="w-3.5 h-3.5 text-[#004BB4]" />
-                                      <span>Imprimir este Listado ({boletasGrupo.length})</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const ids = boletasGrupo.map(b => b.id);
-                                        setSelectedBoletaIds(prev => Array.from(new Set([...prev, ...ids])));
-                                      }}
-                                      className="px-2.5 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg font-bold text-xs cursor-pointer transition-colors"
-                                      title="Seleccionar todas las boletas de esta fecha"
-                                    >
-                                      ✓ Seleccionar ({boletasGrupo.length})
-                                    </button>
-                                  </div>
-                                </div>
-                              </td>
-                            </tr>
-
-                            {/* Boletas de esta fecha */}
-                            {boletasGrupo.map((b, gIdx) => renderBoletaRow(b, gIdx))}
-                          </React.Fragment>
-                        ))}
-                      </>
-                    );
-                  }
-
                   if (selectedHojaFilter === null) {
-                    const totalCols = dependenciaActiva === 'SECRETARIA' || dependenciaActiva === 'TODAS' ? 19 : 18;
+                    const totalCols = dependenciaActiva === 'SECRETARIA' || dependenciaActiva === 'TODAS' ? 18 : 17;
                     return (
                       <>
                         {hojasCalculadas.map((hoja) => {
@@ -2677,7 +2669,7 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
 
                           return (
                             <React.Fragment key={`hoja-group-${hoja.numeroHoja}-${hoja.idHoja}`}>
-                              {/* SEPARADOR OFICIAL DE HOJA FÍSICA (30 BOLETAS POR FOLIO) */}
+                              {/* SEPARADOR OFICIAL DE HOJA FÍSICA */}
                               <tr
                                 id={`hoja-separador-${hoja.numeroHoja}`}
                                 className="bg-gradient-to-r from-[#006DEB] via-[#0053D5] to-[#003EA7] text-white border-y-2 border-blue-400/60 sticky top-0 z-10 shadow-md transition-all duration-300"
@@ -2711,7 +2703,7 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
                                             : 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
                                         }`}
                                       >
-                                        {hoja.cantidad}/30 boletas {hoja.estaLlena ? '✓ Llena' : `(Restan ${hoja.capacidad - hoja.cantidad})`}
+                                        {hoja.cantidad}/{hoja.capacidad} boletas {hoja.estaLlena ? '✓ Llena' : `(Restan ${hoja.capacidad - hoja.cantidad})`}
                                       </span>
                                     </div>
 
@@ -2774,7 +2766,7 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
                                     <div className="flex items-center justify-center gap-2">
                                       <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
                                       <span>
-                                        Fin de Hoja {hoja.numeroHoja} [{hoja.idHoja}]: {hoja.cantidad} de 30 boletas trabajadas (quedan {hoja.capacidad - hoja.cantidad} espacios disponibles para completar la hoja).
+                                        Fin de Hoja {hoja.numeroHoja} [{hoja.idHoja}]: {hoja.cantidad} de {hoja.capacidad} boletas trabajadas (quedan {hoja.capacidad - hoja.cantidad} espacios disponibles para completar la hoja).
                                       </span>
                                       {onToggleFinDePagina && hoja.boletas.length > 0 && (
                                         <button
@@ -2857,11 +2849,11 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
               {/* Indicador de límite de página cuando se está filtrando una página en modo 'solo' */}
               {selectedHojaFilter !== null && hojaFilterMode === 'solo' && currentHojaObj && !currentHojaObj.estaLlena && (
                 <tr className="bg-amber-50/60 border-t-2 border-dashed border-amber-300">
-                  <td colSpan={dependenciaActiva === 'SECRETARIA' || dependenciaActiva === 'TODAS' ? 19 : 18} className="py-2.5 px-4 text-center text-amber-900 font-bold text-xs">
+                  <td colSpan={dependenciaActiva === 'SECRETARIA' || dependenciaActiva === 'TODAS' ? 18 : 17} className="py-2.5 px-4 text-center text-amber-900 font-bold text-xs">
                     <div className="flex items-center justify-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
                       <span>
-                        Límite de la Página {selectedHojaFilter} [{currentHojaObj.idHoja}]: 30 boletas físicas reglamentarias. (Se han trabajado {currentHojaObj.cantidad} de 30; quedan {currentHojaObj.capacidad - currentHojaObj.cantidad} espacios disponibles para completar la página).
+                        Límite de la Página {selectedHojaFilter} [{currentHojaObj.idHoja}]: {currentHojaObj.capacidad} boletas físicas reglamentarias. (Se han trabajado {currentHojaObj.cantidad} de {currentHojaObj.capacidad}; quedan {currentHojaObj.capacidad - currentHojaObj.cantidad} espacios disponibles para completar la página).
                       </span>
                     </div>
                   </td>
@@ -2870,8 +2862,8 @@ export const BoletaTable: React.FC<BoletaTableProps> = ({
 
               {selectedHojaFilter !== null && hojaFilterMode === 'solo' && currentHojaObj && currentHojaObj.estaLlena && (
                 <tr className="bg-emerald-50/60 border-t-2 border-emerald-400">
-                  <td colSpan={dependenciaActiva === 'SECRETARIA' || dependenciaActiva === 'TODAS' ? 19 : 18} className="py-2.5 px-4 text-center text-emerald-900 font-bold text-xs">
-                    ✓ Límite completado: Página {selectedHojaFilter} [{currentHojaObj.idHoja}] llena con sus 30 boletas reglamentarias.
+                  <td colSpan={dependenciaActiva === 'SECRETARIA' || dependenciaActiva === 'TODAS' ? 18 : 17} className="py-2.5 px-4 text-center text-emerald-900 font-bold text-xs">
+                    ✓ Límite completado: Página {selectedHojaFilter} [{currentHojaObj.idHoja}] llena con sus {currentHojaObj.capacidad} boletas reglamentarias.
                   </td>
                 </tr>
               )}

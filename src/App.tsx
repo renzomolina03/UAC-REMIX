@@ -102,7 +102,8 @@ import {
   SeccionRuta,
   SeccionTrabajoInfo,
   DependenciaJudicial,
-  validarRequisitosDevuelta
+  validarRequisitosDevuelta,
+  validarGrupoBoletaCompletoParaDevuelta
 } from './types/judicial';
 
 import { 
@@ -371,6 +372,17 @@ export default function App() {
       if (!check.puedeSerDevuelta) {
         devueltaFinal = false;
         showToast('⚠️ No se puede marcar como Devuelta: Requiere Artículo COPP y Alguacil asignado.');
+      } else if (editingBoleta) {
+        const dummyToCheck = {
+          ...editingBoleta,
+          ...data,
+          ...mergedToCheck,
+        } as BoletaJudicial;
+        const gCheck = validarGrupoBoletaCompletoParaDevuelta(dummyToCheck, boletas);
+        if (!gCheck.puedeDevolverse) {
+          devueltaFinal = false;
+          showToast(gCheck.mensajeError.replace(/\n/g, ' '));
+        }
       }
     }
 
@@ -622,6 +634,11 @@ export default function App() {
       const check = validarRequisitosDevuelta(target);
       if (!check.puedeSerDevuelta) {
         showToast(check.mensajeError.replace(/\n/g, ' '));
+        return;
+      }
+      const gCheck = validarGrupoBoletaCompletoParaDevuelta(target, boletas);
+      if (!gCheck.puedeDevolverse) {
+        showToast(gCheck.mensajeError.replace(/\n/g, ' '));
         return;
       }
     }
@@ -1001,6 +1018,10 @@ export default function App() {
         onAbrirCambioPassword={() => setIsPasswordModalOpen(true)}
         onAbrirAuditoria={() => {
           setSeguridadPestañaInicial('auditoria');
+          setIsSeguridadModalOpen(true);
+        }}
+        onAbrirCredencialesUsuarios={() => {
+          setSeguridadPestañaInicial('usuarios');
           setIsSeguridadModalOpen(true);
         }}
         onCerrarSesion={() => {

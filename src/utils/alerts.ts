@@ -53,7 +53,7 @@ export function esBoletaUrgente(boleta: BoletaJudicial, baseDate: Date = new Dat
   motivo: string;
   diasRestantes?: number;
 } {
-  if (boleta.devueltaAlTribunal || boleta.esSoloNotificacion || !boleta.fechaAudiencia || boleta.fechaAudiencia === 'NOTIFICACION') {
+  if (boleta.esSoloNotificacion || !boleta.fechaAudiencia || boleta.fechaAudiencia === 'NOTIFICACION') {
     return { esUrgente: false, motivo: '' };
   }
   const audDate = parseISODate(boleta.fechaAudiencia);

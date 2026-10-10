@@ -187,10 +187,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
           {/* Grid de 2 Columnas: Izquierda (Bienvenida) y Derecha (Tarjeta Blanca Sign in) */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center w-full relative z-10">
             
-            {/* Columna Izquierda: WELCOME + Descripción */}
+            {/* Columna Izquierda: BIENVENIDO + Descripción */}
             <div className="lg:col-span-6 text-white space-y-3.5 pr-0 lg:pr-6">
               <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black text-white tracking-widest uppercase drop-shadow-xs">
-                WELCOME
+                BIENVENIDO
               </h1>
               
               <h2 className="text-xs sm:text-sm font-bold text-blue-100 tracking-wider uppercase">
@@ -214,7 +214,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </div>
             </div>
 
-            {/* Columna Derecha: Tarjeta Blanca Flotante idéntica a la imagen */}
+            {/* Columna Derecha: Tarjeta Blanca Flotante */}
             <div className="lg:col-span-6 flex justify-center lg:justify-end w-full">
               <div className="bg-white rounded-3xl p-6 sm:p-9 shadow-2xl w-full max-w-md text-slate-800 relative z-10 border border-white/80">
                 
@@ -223,7 +223,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     {/* Encabezado del Formulario */}
                     <div className="mb-5">
                       <h3 className="text-2xl sm:text-3xl font-black text-[#0B1E3B] tracking-tight">
-                        Sign in
+                        Iniciar Sesión
                       </h3>
                       <p className="text-xs text-slate-400 mt-1 font-medium">
                         Ingrese sus credenciales de despacho judicial
@@ -262,9 +262,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       </div>
                     )}
 
-                    {/* Formulario Sign in */}
+                    {/* Formulario Iniciar Sesión */}
                     <form onSubmit={handleSubmit} className="space-y-3.5">
-                      {/* Campo User Name */}
+                      {/* Campo Nombre de Usuario */}
                       <div>
                         <input
                           type="text"
@@ -275,12 +275,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
                             setUsername(e.target.value);
                             if (mensajeError) setMensajeError(null);
                           }}
-                          placeholder="User Name"
+                          placeholder="Nombre de Usuario"
                           className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent transition-all"
                         />
                       </div>
 
-                      {/* Campo Password con botón SHOW / HIDE */}
+                      {/* Campo Contraseña con botón VER / OCULTAR */}
                       <div>
                         <div className="relative">
                           <input
@@ -293,7 +293,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                             }}
                             onKeyDown={handleKeyDown}
                             onKeyUp={handleKeyUp}
-                            placeholder="Password"
+                            placeholder="Contraseña"
                             className="w-full px-4 py-3 pr-16 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent transition-all"
                           />
                           <button
@@ -302,7 +302,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                             className="absolute inset-y-0 right-0 pr-4 flex items-center text-xs font-black tracking-wider text-slate-500 hover:text-blue-600 cursor-pointer uppercase select-none transition-colors"
                             tabIndex={-1}
                           >
-                            {mostrarPassword ? 'HIDE' : 'SHOW'}
+                            {mostrarPassword ? 'OCULTAR' : 'VER'}
                           </button>
                         </div>
                         {capsLockActivo && (
@@ -312,7 +312,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                         )}
                       </div>
 
-                      {/* Fila Remember me y Forgot Password? */}
+                      {/* Fila Recordarme y ¿Olvidó su contraseña? */}
                       <div className="flex items-center justify-between text-xs pt-1">
                         <label className="flex items-center gap-2 cursor-pointer select-none text-slate-600 hover:text-slate-800">
                           <input
@@ -321,7 +321,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                             onChange={(e) => setRecordarme(e.target.checked)}
                             className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                           />
-                          <span>Remember me</span>
+                          <span>Recordarme</span>
                         </label>
 
                         <button
@@ -333,11 +333,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
                           }}
                           className="text-slate-500 hover:text-blue-600 font-medium transition-colors cursor-pointer"
                         >
-                          Forgot Password?
+                          ¿Olvidó su contraseña?
                         </button>
                       </div>
 
-                      {/* Botón Principal "Sing in" exactamente como en la imagen */}
+                      {/* Botón Principal Iniciar Sesión */}
                       <button
                         type="submit"
                         disabled={cargando || cuentaBloqueada}
@@ -346,22 +346,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
                         {cargando ? (
                           <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                         ) : (
-                          <span>Sing in</span>
+                          <span>Iniciar Sesión</span>
                         )}
                       </button>
                     </form>
-
-                    {/* Enlace inferior "Don't have an account? Sign Up" */}
-                    <div className="pt-4 text-center text-xs text-slate-500">
-                      <span>Don't have an account? </span>
-                      <button
-                        type="button"
-                        onClick={() => setTabActiva('cuentas')}
-                        className="text-blue-600 hover:text-blue-700 font-bold hover:underline cursor-pointer"
-                      >
-                        Sign Up
-                      </button>
-                    </div>
 
                     {/* Acceso Rápido Demo con 1 clic (Supervisor, Secretario, Notificador) */}
                     <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-center gap-1.5 text-[11px]">

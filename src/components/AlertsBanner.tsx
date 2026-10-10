@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Clock, CheckCircle2, Flame, Bell, ChevronDown, ChevronUp } from 'lucide-react';
 import { BoletaJudicial } from '../types/judicial';
-import { evaluarAlertaBoleta } from '../utils/alerts';
+import { evaluarAlertaBoleta, esBoletaUrgente } from '../utils/alerts';
 
 interface AlertsBannerProps {
   boletas: BoletaJudicial[];
@@ -21,10 +21,17 @@ export const AlertsBanner: React.FC<AlertsBannerProps> = ({
   let devueltas = 0;
 
   boletas.forEach((b) => {
-    const alerta = evaluarAlertaBoleta(b);
-    if (alerta.nivel === 'CRITICA') criticas++;
-    else if (alerta.nivel === 'URGENTE') urgentes++;
-    if (b.devueltaAlTribunal) devueltas++;
+    if (b.devueltaAlTribunal) {
+      devueltas++;
+    } else {
+      const urg = esBoletaUrgente(b);
+      const alerta = evaluarAlertaBoleta(b);
+      if (urg.esUrgente || alerta.nivel === 'CRITICA' || !!b.esUrgente) {
+        criticas++;
+      } else if (alerta.nivel === 'URGENTE') {
+        urgentes++;
+      }
+    }
   });
 
   const total = boletas.length;
@@ -50,9 +57,18 @@ export const AlertsBanner: React.FC<AlertsBannerProps> = ({
               ⏳ Pendientes: {pendientes}
             </span>
             {criticas > 0 && (
-              <span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded-full font-bold animate-pulse">
+              <button
+                type="button"
+                onClick={() => onSelectFilter(activeFilter === 'CRITICA' ? 'TODAS' : 'CRITICA')}
+                className={`px-2.5 py-0.5 rounded-full font-bold animate-pulse cursor-pointer border transition-all flex items-center gap-1 ${
+                  activeFilter === 'CRITICA'
+                    ? 'bg-rose-700 text-white border-rose-800 ring-2 ring-rose-400'
+                    : 'bg-rose-100 text-rose-800 border-rose-300 hover:bg-rose-200'
+                }`}
+                title="Clic para ver cuáles son las boletas urgentes pendientes de entrega"
+              >
                 🔥 {criticas} Urgentes
-              </span>
+              </button>
             )}
           </div>
         </div>
@@ -86,7 +102,7 @@ export const AlertsBanner: React.FC<AlertsBannerProps> = ({
                 : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
             }`}
           >
-            <span>🔥 Audiencia Hoy / Inmediata</span>
+            <span>🔥 Urgentes Pendientes</span>
             <span className="bg-white/20 px-1.5 py-0.2 rounded">{criticas}</span>
           </button>
 

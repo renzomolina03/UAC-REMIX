@@ -22,12 +22,11 @@ import {
   Search
 } from 'lucide-react';
 import QRCode from 'qrcode';
-import { BoletaJudicial, TribunalInfo, ConfiguracionDespacho, matchesTribunal } from '../types/judicial';
+import { BoletaJudicial, TribunalInfo, ConfiguracionDespacho, matchesTribunal, hasArticulo } from '../types/judicial';
 import { ARTICULOS_INFO } from '../data/mockBoletas';
 import { evaluarAlertaBoleta, formatFechaDisplay, parseISODate } from '../utils/alerts';
-import { exportarBoletasExcel, exportarRelacionPeriodicaExcel } from '../utils/exportExcel';
+import { exportarRelacionPeriodicaExcel } from '../utils/exportExcel';
 import { 
-  exportarBoletasPDF, 
   exportarOficioEstadisticasGlobalesPDF, 
   exportarInformeMatrizTribunalPDF,
   exportarRelacionPeriodicaPDF
@@ -72,25 +71,30 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
     ? Math.round((currentTriDevueltas / currentTriBoletas.length) * 100) 
     : 0;
 
+  // Boletas de los tribunales registrados del Circuito Judicial (11 despachos)
+  const boletasCircuito = React.useMemo(() => {
+    return boletas.filter(b => tribunales.some(t => matchesTribunal(b.tribunal, t.codigo)));
+  }, [boletas, tribunales]);
+
   // Requerimiento: Para las estadísticas deben aparecer solo las boletas que fueron DEVUELTAS al tribunal,
-  // con Artículo COPP y con Alguacil que practicó.
+  // con Artículo COPP y con Alguacil que practicó, de los despachos judiciales.
   const boletasValidasParaEstadisticas = React.useMemo(() => {
-    return boletas.filter(b => {
+    return boletasCircuito.filter(b => {
       const devuelta = !!b.devueltaAlTribunal;
       const tieneArticulo = !!(b.articuloCOPP && b.articuloCOPP.trim() !== '') || !!(b.articulosCOPP && b.articulosCOPP.length > 0);
       const tieneAlguacil = !!(b.alguacilPractica && b.alguacilPractica.trim() !== '' && !b.alguacilPractica.toUpperCase().includes('SIN ASIGNAR') && !b.alguacilPractica.toUpperCase().includes('SIN ALGUACIL'));
       return devuelta && tieneArticulo && tieneAlguacil;
     });
-  }, [boletas]);
+  }, [boletasCircuito]);
 
   const total = boletasValidasParaEstadisticas.length;
   const devueltas = total;
-  const boletasSinDevolver = boletas.length - boletasValidasParaEstadisticas.length;
+  const boletasSinDevolver = boletasCircuito.length - boletasValidasParaEstadisticas.length;
   const conAcuse = boletasValidasParaEstadisticas.filter(b => b.acuseGenerado).length;
 
   let criticas = 0;
   let urgentes = 0;
-  boletas.forEach(b => {
+  boletasCircuito.forEach(b => {
     if (!b.devueltaAlTribunal) {
       const a = evaluarAlertaBoleta(b);
       if (a.nivel === 'CRITICA') criticas++;
@@ -98,7 +102,7 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
     }
   });
 
-  const porcentajeEfectividad = boletas.length > 0 ? Math.round((total / boletas.length) * 100) : 0;
+  const porcentajeEfectividad = boletasCircuito.length > 0 ? Math.round((total / boletasCircuito.length) * 100) : 0;
 
   // Estados para Relación por Día, Semana y Mes (Requerimiento: "guardar toda la relacion por dia semana mes")
   const [tipoPeriodoRelacion, setTipoPeriodoRelacion] = useState<'DIA' | 'SEMANA' | 'MES'>('DIA');
@@ -144,6 +148,74 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
       return false;
     });
   }, [boletas, tipoPeriodoRelacion, fechaRelacion, config.mesRutaActual]);
+
+  // Estadísticas consolidadas del período seleccionado (100% Estadístico, sin listado de boletas)
+  const statsPeriodo = React.useMemo(() => {
+    const total = boletasRelacionFiltradas.length;
+    const dev = boletasRelacionFiltradas.filter(b => b.devueltaAlTribunal).length;
+    const pend = total - dev;
+    const efectividad = total > 0 ? Math.round((dev / total) * 100) : 0;
+
+    // Conteo por artículos COPP
+    let a167 = 0, a168 = 0, a169 = 0, a170 = 0, a171 = 0, a165 = 0, aS165 = 0;
+    boletasRelacionFiltradas.forEach(b => {
+      if (hasArticulo(b, '167')) a167++;
+      if (hasArticulo(b, '168')) a168++;
+      if (hasArticulo(b, '169')) a169++;
+      if (hasArticulo(b, '170')) a170++;
+      if (hasArticulo(b, '171')) a171++;
+      if (hasArticulo(b, '165')) a165++;
+      if (hasArticulo(b, 'S_165')) aS165++;
+    });
+
+    // Conteo por tribunales
+    const tribsCodigos = ['C1', 'C2', 'C3', 'J1', 'J2', 'J3', 'E1', 'E2', 'TPM1', 'TPM2', 'SPA 1', 'OTRO'];
+    const tribsData = tribsCodigos.map(tri => {
+      const bols = boletasRelacionFiltradas.filter(b => {
+        const t = (b.tribunal || '').toUpperCase().trim();
+        if (tri === 'OTRO') return t === 'OTRO' || !tribsCodigos.slice(0, 11).includes(t);
+        return t === tri;
+      });
+      const d = bols.filter(b => b.devueltaAlTribunal).length;
+      return {
+        codigo: tri,
+        total: bols.length,
+        devueltas: d,
+        pendientes: bols.length - d,
+        efectividad: bols.length > 0 ? Math.round((d / bols.length) * 100) : 0,
+      };
+    }).filter(t => t.total > 0);
+
+    // Conteo por alguaciles
+    const alguacilesMap = new Map<string, { total: number; dev: number }>();
+    boletasRelacionFiltradas.forEach(b => {
+      const alg = (b.alguacilPractica || 'SIN ASIGNAR').trim();
+      const algUpper = alg.toUpperCase();
+      if (!alg || algUpper.includes('SIN ALGUACIL') || algUpper.includes('SIN ASIGNAR')) return;
+      if (!alguacilesMap.has(alg)) alguacilesMap.set(alg, { total: 0, dev: 0 });
+      const item = alguacilesMap.get(alg)!;
+      item.total++;
+      if (b.devueltaAlTribunal) item.dev++;
+    });
+
+    const algData = Array.from(alguacilesMap.entries()).map(([nombre, s]) => ({
+      nombre,
+      total: s.total,
+      devueltas: s.dev,
+      pendientes: s.total - s.dev,
+      efectividad: s.total > 0 ? Math.round((s.dev / s.total) * 100) : 0
+    })).sort((a, b) => b.total - a.total);
+
+    return {
+      total,
+      devueltas: dev,
+      pendientes: pend,
+      efectividad,
+      articulos: { a167, a168, a169, a170, a171, a165, aS165 },
+      tribunales: tribsData,
+      alguaciles: algData,
+    };
+  }, [boletasRelacionFiltradas]);
 
   const handleDescargarRelacionExcel = () => {
     const etiqueta = tipoPeriodoRelacion === 'DIA' 
@@ -288,13 +360,6 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
     }
   };
 
-  // Helper para verificar presencia de artículo (simple o múltiple)
-  const hasArticulo = (b: BoletaJudicial, artCodigo: string) => {
-    if (b.articulosCOPP && b.articulosCOPP.includes(artCodigo as any)) return true;
-    if (b.articuloCOPP && b.articuloCOPP.includes(artCodigo)) return true;
-    return false;
-  };
-
   // Conteo por Artículo COPP (solo boletas devueltas válidas)
   const countArticulos = {
     '165': boletasValidasParaEstadisticas.filter(b => hasArticulo(b, '165')).length,
@@ -332,6 +397,108 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
     return Object.entries(map).sort((a, b) => b[1].total - a[1].total);
   }, [boletasValidasParaEstadisticas]);
 
+  // Matriz de Sujetos Procesales en el orden exacto solicitado
+  const categoriasSujetos = React.useMemo(() => [
+    {
+      label: 'MINISTERIO PÚBLICO (FISCALÍAS)',
+      filter: (b: BoletaJudicial) => b.tipoCitado === 'FISCALIA'
+    },
+    {
+      label: 'DEFENSA (PÚBLICA / PRIVADA)',
+      filter: (b: BoletaJudicial) => b.tipoCitado === 'ABOGADO_DEFENSA' || b.tipoCitado === 'DEFENSA_PUBLICA'
+    },
+    {
+      label: 'IMPUTADOS / ACUSADOS / PENADOS',
+      filter: (b: BoletaJudicial) => b.tipoCitado === 'IMPUTADO' || b.tipoCitado === 'ACUSADO' || b.tipoCitado === 'PENADO' || b.tipoCitado === 'INVESTIGADO'
+    },
+    {
+      label: 'VÍCTIMAS, QUERELLANTES Y DENUNC.',
+      filter: (b: BoletaJudicial) => b.tipoCitado === 'VICTIMA' || b.tipoCitado === 'QUERELLANTE' || b.tipoCitado === 'DENUNCIANTE'
+    },
+    {
+      label: 'TESTIGOS Y EXPERTOS',
+      filter: (b: BoletaJudicial) => b.tipoCitado === 'TESTIGO' || b.tipoCitado === 'EXPERTO'
+    },
+    {
+      label: 'FUNCIONARIOS / CUERPOS POLICIALES.',
+      filter: (b: BoletaJudicial) => b.tipoCitado === 'ORGANO_POLICIAL' || b.tipoCitado === 'FUNCIONARIO'
+    },
+    {
+      label: 'OTROS (TERCEROS / FIADORES / REP.).',
+      filter: (b: BoletaJudicial) => ['TERCERO', 'FIADOR', 'APODERADO', 'REPRESENTANTE_LEGAL', 'SOLICITANTE', 'CIUDADANO', 'OTRO'].includes(b.tipoCitado) || 
+                     !['FISCALIA', 'ABOGADO_DEFENSA', 'DEFENSA_PUBLICA', 'IMPUTADO', 'ACUSADO', 'PENADO', 'INVESTIGADO', 'VICTIMA', 'QUERELLANTE', 'DENUNCIANTE', 'TESTIGO', 'EXPERTO', 'ORGANO_POLICIAL', 'FUNCIONARIO'].includes(b.tipoCitado)
+    }
+  ], []);
+
+  const sujetosRows = React.useMemo(() => {
+    let sum167 = 0;
+    let sum168 = 0;
+    let sum169 = 0;
+    let sum170 = 0;
+    let sum171 = 0;
+    let sum165 = 0;
+    let sumS165 = 0;
+    let sumTot = 0;
+    let sumDev = 0;
+
+    const items = categoriasSujetos.map(cat => {
+      const sub = boletasCircuito.filter(cat.filter);
+      const c167 = sub.filter(b => hasArticulo(b, '167')).length;
+      const c168 = sub.filter(b => hasArticulo(b, '168')).length;
+      const c169 = sub.filter(b => hasArticulo(b, '169')).length;
+      const c170 = sub.filter(b => hasArticulo(b, '170')).length;
+      const c171 = sub.filter(b => hasArticulo(b, '171')).length;
+      const c165 = sub.filter(b => hasArticulo(b, '165')).length;
+      const cS165 = sub.filter(b => hasArticulo(b, 'S_165')).length;
+      const tot = sub.length;
+      const dev = sub.filter(b => b.devueltaAlTribunal).length;
+      const pct = tot > 0 ? `${Math.round((dev / tot) * 100)}%` : '0%';
+
+      sum167 += c167;
+      sum168 += c168;
+      sum169 += c169;
+      sum170 += c170;
+      sum171 += c171;
+      sum165 += c165;
+      sumS165 += cS165;
+      sumTot += tot;
+      sumDev += dev;
+
+      return {
+        label: cat.label,
+        c167,
+        c168,
+        c169,
+        c170,
+        c171,
+        c165,
+        cS165,
+        tot,
+        dev,
+        pct
+      };
+    });
+
+    const pctGlobal = sumTot > 0 ? `${Math.round((sumDev / sumTot) * 100)}%` : '0%';
+
+    return {
+      items,
+      total: {
+        label: 'TOTAL GENERAL',
+        c167: sum167,
+        c168: sum168,
+        c169: sum169,
+        c170: sum170,
+        c171: sum171,
+        c165: sum165,
+        cS165: sumS165,
+        tot: sumTot,
+        dev: sumDev,
+        pct: pctGlobal
+      }
+    };
+  }, [boletasCircuito, categoriasSujetos]);
+
   return (
     <div className="space-y-5">
       {/* Header de Estadísticas */}
@@ -340,11 +507,11 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
           <div className="flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-indigo-600" />
             <h2 className="text-base font-bold text-slate-900 tracking-tight">
-              Informe Estadístico Mensual de Boletas y Alguacilazgo
+              Informe Estadístico Mensual de Gestión y Rendición Judicial
             </h2>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Ruta {config.mesRutaActual} • {config.circuitoJudicial}
+            Consolidado Estadístico • Ruta {config.mesRutaActual} • {config.circuitoJudicial} (100% Estadístico)
           </p>
         </div>
 
@@ -358,28 +525,28 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
             <span>Descargar Oficio Global (PDF)</span>
           </button>
           <button
-            onClick={() => exportarBoletasExcel(boletas, config)}
+            onClick={() => exportarRelacionPeriodicaExcel(boletas, config, 'MES', config.mesRutaActual)}
             className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-xs"
-            title="Descargar archivo Excel con todas las boletas y pestañas por tribunal"
+            title="Descargar reporte estadístico consolidado del mes en Microsoft Excel (.xlsx)"
           >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>Descargar Excel</span>
+            <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
+            <span>Estadísticas del Mes (Excel)</span>
           </button>
           <button
-            onClick={() => exportarBoletasPDF(boletas, config, undefined, { modoSalida: 'descargar' })}
+            onClick={() => exportarRelacionPeriodicaPDF(boletas, config, 'MES', config.mesRutaActual, 'descargar')}
             className="inline-flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-xs"
-            title="Descargar archivo físico PDF con todas las hojas"
+            title="Descargar reporte estadístico consolidado oficial del mes en PDF"
           >
-            <Download className="w-4 h-4" />
-            <span>Descargar PDF</span>
+            <Download className="w-4 h-4 text-indigo-200" />
+            <span>Estadísticas del Mes (PDF)</span>
           </button>
           <button
-            onClick={() => exportarBoletasPDF(boletas, config, undefined, { modoSalida: 'imprimir' })}
+            onClick={() => exportarRelacionPeriodicaPDF(boletas, config, 'MES', config.mesRutaActual, 'imprimir')}
             className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-xs"
-            title="Imprimir listado directamente sin descargar"
+            title="Imprimir directamente el reporte estadístico oficial del mes"
           >
             <Printer className="w-4 h-4 text-indigo-300" />
-            <span>Imprimir PDF</span>
+            <span>Imprimir Estadísticas (PDF)</span>
           </button>
         </div>
       </div>
@@ -562,7 +729,7 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
         </div>
       </div>
 
-      {/* MÓDULO: GUARDAR Y EXPORTAR RELACIÓN POR DÍA, SEMANA Y MES (REQUERIMIENTO OFICIAL) */}
+      {/* MÓDULO: CONTROL PERIÓDICO JUDICIAL - ESTADÍSTICAS POR DÍA, SEMANA Y MES (100% ESTADÍSTICO) */}
       <div className="bg-white rounded-xl border border-indigo-200 shadow-sm overflow-hidden">
         <div className="px-5 py-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-indigo-900">
           <div className="flex items-center gap-3">
@@ -579,10 +746,10 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
                 </span>
               </div>
               <h3 className="text-sm font-black text-white tracking-tight mt-0.5">
-                Guardar y Exportar Relación por Día, Semana y Mes
+                Guardar y Exportar Estadísticas por Día, Semana y Mes
               </h3>
               <p className="text-xs text-slate-300 mt-0.5">
-                Genera la relación completa y detallada de boletas u oficios del despacho judicial según el período deseado.
+                Resumen estadístico consolidado y rendición de cuentas de actuaciones judiciales según el período deseado (100% numérico y estadístico, sin listado de boletas).
               </p>
             </div>
           </div>
@@ -633,7 +800,7 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <span className="font-bold text-slate-700 uppercase text-[11px]">
-                {tipoPeriodoRelacion === 'DIA' ? 'Fecha de la Relación:' : tipoPeriodoRelacion === 'SEMANA' ? 'Semana de Referencia:' : 'Mes de la Relación:'}
+                {tipoPeriodoRelacion === 'DIA' ? 'Fecha de Consulta:' : tipoPeriodoRelacion === 'SEMANA' ? 'Semana de Referencia:' : 'Mes de Consulta:'}
               </span>
               <input
                 type="date"
@@ -644,107 +811,198 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
             </div>
 
             <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-semibold text-slate-700 shadow-2xs">
-              <span>Registros en esta relación: <strong className="text-indigo-700 font-mono text-sm">{boletasRelacionFiltradas.length}</strong></span>
+              <span>Total Actuaciones: <strong className="text-indigo-700 font-mono text-sm">{statsPeriodo.total}</strong></span>
               <span>•</span>
-              <span className="text-emerald-700 font-bold">Devueltas: {boletasRelacionFiltradas.filter(b => b.devueltaAlTribunal).length}</span>
+              <span className="text-emerald-700 font-bold">Devueltas: {statsPeriodo.devueltas}</span>
               <span>•</span>
-              <span className="text-amber-700 font-bold">En Ruta: {boletasRelacionFiltradas.filter(b => !b.devueltaAlTribunal).length}</span>
+              <span className="text-amber-700 font-bold">En Ruta: {statsPeriodo.pendientes}</span>
+              <span>•</span>
+              <span className="text-indigo-700 font-bold">Efectividad: {statsPeriodo.efectividad}%</span>
             </div>
           </div>
 
-          {/* Botones para Guardar e Imprimir la Relación */}
+          {/* Botones para Guardar e Imprimir Estadísticas */}
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={handleDescargarRelacionExcel}
-              disabled={boletasRelacionFiltradas.length === 0}
+              disabled={statsPeriodo.total === 0}
               className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-              title="Guardar y descargar la relación en formato Microsoft Excel"
+              title="Guardar y descargar el reporte estadístico en formato Microsoft Excel"
             >
               <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
-              <span>Guardar en Excel (.xlsx)</span>
+              <span>Guardar Estadísticas en Excel (.xlsx)</span>
             </button>
 
             <button
               type="button"
               onClick={handleDescargarRelacionPDF}
-              disabled={boletasRelacionFiltradas.length === 0}
+              disabled={statsPeriodo.total === 0}
               className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-              title="Guardar y descargar la relación oficial en archivo PDF con membrete y firmas"
+              title="Guardar y descargar el reporte estadístico oficial en PDF"
             >
               <Download className="w-4 h-4 text-indigo-200" />
-              <span>Guardar en PDF (.pdf)</span>
+              <span>Guardar Estadísticas en PDF (.pdf)</span>
             </button>
 
             <button
               type="button"
               onClick={handleImprimirRelacionPDF}
-              disabled={boletasRelacionFiltradas.length === 0}
+              disabled={statsPeriodo.total === 0}
               className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-100 font-bold text-xs rounded-lg transition-all shadow-xs flex items-center gap-1.5 cursor-pointer border border-slate-700"
-              title="Imprimir directamente la relación judicial"
+              title="Imprimir directamente el reporte estadístico oficial"
             >
               <Printer className="w-4 h-4 text-slate-300" />
-              <span>Imprimir</span>
+              <span>Imprimir Estadísticas</span>
             </button>
           </div>
         </div>
 
-        {/* Vista Previa de la Relación (Primeros registros) */}
-        {boletasRelacionFiltradas.length > 0 ? (
-          <div className="overflow-x-auto max-h-60 border-t border-slate-100">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead className="bg-slate-100 text-slate-700 font-bold text-[10px] uppercase tracking-wider sticky top-0 border-b border-slate-200">
-                <tr>
-                  <th className="py-2 px-3 w-8 text-center">#</th>
-                  <th className="py-2 px-3">F. Asignación</th>
-                  <th className="py-2 px-3">Causa Nº</th>
-                  <th className="py-2 px-3 text-center">Boleta</th>
-                  <th className="py-2 px-3 text-center">Oficio</th>
-                  <th className="py-2 px-3">Notificado / Citado</th>
-                  <th className="py-2 px-3 text-center">Carácter</th>
-                  <th className="py-2 px-3 text-center">Tri</th>
-                  <th className="py-2 px-3">Alguacil</th>
-                  <th className="py-2 px-3 text-center">Art.</th>
-                  <th className="py-2 px-3 text-center">Estado</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-[11px]">
-                {boletasRelacionFiltradas.slice(0, 15).map((b, idx) => (
-                  <tr key={b.id || idx} className="hover:bg-slate-50 transition-colors">
-                    <td className="py-1.5 px-3 text-center font-bold text-slate-400">{idx + 1}</td>
-                    <td className="py-1.5 px-3 font-mono text-slate-600">{b.fechaAsignacion ? formatFechaDisplay(b.fechaAsignacion) : '-'}</td>
-                    <td className="py-1.5 px-3 font-mono font-bold text-blue-900">{b.numeroCausa}</td>
-                    <td className="py-1.5 px-3 text-center font-mono font-bold text-slate-800">{b.boletaNumero}</td>
-                    <td className="py-1.5 px-3 text-center font-mono text-slate-600">{b.numeroOficio || '-'}</td>
-                    <td className="py-1.5 px-3 font-medium text-slate-800">{b.notificadoCitado}</td>
-                    <td className="py-1.5 px-3 text-center font-bold text-slate-600">{b.tipoCitado}</td>
-                    <td className="py-1.5 px-3 text-center font-bold text-slate-700">{b.tribunalOtro || b.tribunal}</td>
-                    <td className="py-1.5 px-3 text-slate-700">{b.alguacilPractica || 'SIN ASIGNAR'}</td>
-                    <td className="py-1.5 px-3 text-center font-bold text-slate-700">{b.articuloCOPP || '-'}</td>
-                    <td className="py-1.5 px-3 text-center">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        b.devueltaAlTribunal
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}>
-                        {b.devueltaAlTribunal ? 'DEVUELTA' : 'EN RUTA'}
+        {/* Panel Estadístico del Período (100% Estadísticas, Sin Boletas Individuales) */}
+        {statsPeriodo.total > 0 ? (
+          <div className="p-5 space-y-5 bg-white">
+            {/* 1. Tarjetas de Resumen Numérico (KPIs) */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-center">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Total Asignadas</span>
+                <span className="text-2xl font-black text-slate-900 mt-1 block">{statsPeriodo.total}</span>
+                <span className="text-[10px] text-slate-400 font-medium">100% del período</span>
+              </div>
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-center">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 block">Practicadas / Devueltas</span>
+                <span className="text-2xl font-black text-emerald-800 mt-1 block">{statsPeriodo.devueltas}</span>
+                <span className="text-[10px] text-emerald-600 font-bold">{statsPeriodo.efectividad}% de efectividad</span>
+              </div>
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-center">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 block">En Ruta / Pendientes</span>
+                <span className="text-2xl font-black text-amber-800 mt-1 block">{statsPeriodo.pendientes}</span>
+                <span className="text-[10px] text-amber-600 font-medium">{100 - statsPeriodo.efectividad}% pendientes</span>
+              </div>
+              <div className="p-3.5 bg-indigo-50 border border-indigo-200 rounded-xl text-center">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 block">Efectividad Procesal</span>
+                <span className="text-2xl font-black text-indigo-800 mt-1 block">{statsPeriodo.efectividad}%</span>
+                <span className="text-[10px] text-indigo-600 font-medium">Gestión del período</span>
+              </div>
+            </div>
+
+            {/* 2. Matriz Estadística por Tribunal y Matriz de Artículos COPP */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* Tabla de Tribunales */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                <div className="px-4 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Desglose Estadístico por Tribunal</span>
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono font-bold">
+                    {statsPeriodo.tribunales.length} despachos activos
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-600 border-b border-slate-200">
+                      <tr>
+                        <th className="py-2 px-3">Tribunal</th>
+                        <th className="py-2 px-3 text-center">Asignadas</th>
+                        <th className="py-2 px-3 text-center">Devueltas</th>
+                        <th className="py-2 px-3 text-center">En Ruta</th>
+                        <th className="py-2 px-3 text-center">% Efect.</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-[11px]">
+                      {statsPeriodo.tribunales.map((t) => (
+                        <tr key={t.codigo} className="hover:bg-slate-50">
+                          <td className="py-2 px-3 font-bold text-slate-800">Tribunal {t.codigo}</td>
+                          <td className="py-2 px-3 text-center font-mono font-bold text-slate-700">{t.total}</td>
+                          <td className="py-2 px-3 text-center font-mono font-bold text-emerald-700">{t.devueltas}</td>
+                          <td className="py-2 px-3 text-center font-mono text-amber-700">{t.pendientes}</td>
+                          <td className="py-2 px-3 text-center font-bold text-indigo-700">{t.efectividad}%</td>
+                        </tr>
+                      ))}
+                      <tr className="bg-slate-100 font-bold border-t-2 border-slate-300 text-[11px]">
+                        <td className="py-2 px-3 text-slate-900">TOTAL CONSOLIDADO</td>
+                        <td className="py-2 px-3 text-center font-mono text-slate-900">{statsPeriodo.total}</td>
+                        <td className="py-2 px-3 text-center font-mono text-emerald-800">{statsPeriodo.devueltas}</td>
+                        <td className="py-2 px-3 text-center font-mono text-amber-800">{statsPeriodo.pendientes}</td>
+                        <td className="py-2 px-3 text-center text-indigo-900">{statsPeriodo.efectividad}%</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Matriz de Artículos COPP */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                <div className="px-4 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                    <FileCheck2 className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Tipificación por Artículos del C.O.P.P.</span>
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono font-bold">
+                    7 Tipificaciones
+                  </span>
+                </div>
+                <div className="p-3 bg-slate-50/50 space-y-2 text-xs">
+                  {[
+                    { art: '167', desc: 'Citación Personal del Imputado', count: statsPeriodo.articulos.a167, bg: 'bg-slate-100 border-slate-300' },
+                    { art: '168', desc: 'Citación por Boleta / Domicilio', count: statsPeriodo.articulos.a168, bg: 'bg-blue-50 border-blue-200' },
+                    { art: '169', desc: 'Citación por Cartel en Estrado o Prensa', count: statsPeriodo.articulos.a169, bg: 'bg-indigo-50 border-indigo-200' },
+                    { art: '170', desc: 'Citación de Víctimas, Testigos y Expertos', count: statsPeriodo.articulos.a170, bg: 'bg-emerald-50 border-emerald-200' },
+                    { art: '171', desc: 'Citación por Exhorto o Comisión', count: statsPeriodo.articulos.a171, bg: 'bg-rose-50 border-rose-200' },
+                    { art: '165', desc: 'Notificación de Autos y Decretos', count: statsPeriodo.articulos.a165, bg: 'bg-amber-50 border-amber-200' },
+                    { art: 'S 165', desc: 'Notificación de Sobreseimiento', count: statsPeriodo.articulos.aS165, bg: 'bg-orange-50 border-orange-200' },
+                  ].map((item) => (
+                    <div key={item.art} className={`flex items-center justify-between p-2 rounded-lg border ${item.bg}`}>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-white border border-slate-300 shadow-2xs">
+                          Art. {item.art}
+                        </span>
+                        <span className="text-[11px] text-slate-700 font-medium">{item.desc}</span>
+                      </div>
+                      <span className="font-mono font-black text-sm text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200 shadow-2xs">
+                        {item.count}
                       </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {boletasRelacionFiltradas.length > 15 && (
-              <div className="py-2 text-center text-xs text-slate-500 bg-slate-50 border-t border-slate-200">
-                Mostrando 15 de {boletasRelacionFiltradas.length} boletas. Al descargar en Excel o PDF se exportará la totalidad de la relación.
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* 3. Rendimiento de Alguaciles si hay alguaciles activos */}
+            {statsPeriodo.alguaciles.length > 0 && (
+              <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                <div className="px-4 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Rendimiento de Alguaciles en el Período</span>
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono font-bold">
+                    {statsPeriodo.alguaciles.length} funcionarios
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 p-3 bg-slate-50/50">
+                  {statsPeriodo.alguaciles.map(a => (
+                    <div key={a.nombre} className="p-2.5 bg-white border border-slate-200 rounded-lg shadow-2xs flex items-center justify-between">
+                      <div>
+                        <span className="font-bold text-slate-800 text-[11px] block">{a.nombre}</span>
+                        <span className="text-[10px] text-slate-500 font-medium">
+                          {a.devueltas} de {a.total} practicadas
+                        </span>
+                      </div>
+                      <span className="font-mono font-bold text-xs px-2 py-1 bg-indigo-50 text-indigo-700 rounded-md border border-indigo-200">
+                        {a.efectividad}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
         ) : (
           <div className="p-8 text-center text-slate-400 bg-slate-50">
             <Calendar className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-            <p className="font-bold text-xs text-slate-600">No hay boletas u oficios registrados en el período seleccionado ({tipoPeriodoRelacion}: {formatFechaDisplay(fechaRelacion)}).</p>
-            <p className="text-[11px] text-slate-400 mt-0.5">Seleccione otra fecha o cambie el período para generar la relación.</p>
+            <p className="font-bold text-xs text-slate-600">No hay estadísticas registradas para el período seleccionado ({tipoPeriodoRelacion}: {formatFechaDisplay(fechaRelacion)}).</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">Seleccione otra fecha o cambie el período para ver el resumen estadístico.</p>
           </div>
         )}
       </div>
@@ -756,7 +1014,7 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
             Criterio Oficial
           </span>
           <span className="font-semibold">
-            Solo se computan boletas <strong>Devueltas al Tribunal</strong> con Alguacil y Artículo COPP asignados.
+            Solo se computan diligencias y actuaciones <strong>Devueltas al Tribunal</strong> con Alguacil y Artículo COPP asignados.
           </span>
         </div>
         <div className="text-[11px] font-medium text-blue-800">
@@ -825,7 +1083,7 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
                 Todos positivos excepto Art. 171 (Negativo) • Art. 169 (Medio Telemático)
               </p>
             </div>
-            <span className="text-[11px] text-slate-500 font-bold">{total} Boletas</span>
+            <span className="text-[11px] text-slate-500 font-bold">{total} Diligencias</span>
           </div>
 
           <div className="space-y-3.5">
@@ -922,7 +1180,73 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
         </div>
       </div>
 
-      {/* Rendimiento por Alguacil */}
+      {/* Matriz Oficial: Carácter / Sujeto Procesal vs Artículos del COPP */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-3 mb-3 border-b border-slate-100 gap-2">
+          <div>
+            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-blue-700" />
+              <span>Matriz Oficial: Carácter / Sujeto Procesal vs Artículos del COPP</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Consolidación legal del Circuito Judicial Penal (Tipificación de los 7 Artículos del COPP por sujeto procesal)
+            </p>
+          </div>
+          <span className="text-[11px] font-bold px-2.5 py-1 bg-blue-50 text-blue-800 rounded-lg border border-blue-200">
+            {sujetosRows.total.tot} Actuaciones Circuito
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-800 text-white font-black text-[11px]">
+                <th className="py-2.5 px-3 rounded-tl-lg">CARÁCTER / SUJETO PROCESAL</th>
+                <th className="py-2.5 px-2 text-center bg-slate-700">167</th>
+                <th className="py-2.5 px-2 text-center bg-slate-700">168</th>
+                <th className="py-2.5 px-2 text-center bg-slate-700">169</th>
+                <th className="py-2.5 px-2 text-center bg-slate-700">170</th>
+                <th className="py-2.5 px-2 text-center bg-slate-700">171</th>
+                <th className="py-2.5 px-2 text-center bg-slate-700">165</th>
+                <th className="py-2.5 px-2 text-center bg-slate-700">S 165</th>
+                <th className="py-2.5 px-2 text-center bg-slate-900">TOTAL</th>
+                <th className="py-2.5 px-2 text-center bg-emerald-800">PRACT.</th>
+                <th className="py-2.5 px-2 text-center bg-blue-900 rounded-tr-lg">% EFECT.</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-700 font-semibold">
+              {sujetosRows.items.map((row, idx) => (
+                <tr key={idx} className={idx % 2 === 0 ? 'bg-white hover:bg-slate-50' : 'bg-slate-50/60 hover:bg-slate-100/60'}>
+                  <td className="py-2 px-3 font-bold text-slate-900">{row.label}</td>
+                  <td className="py-2 px-2 text-center font-mono">{row.c167 || '-'}</td>
+                  <td className="py-2 px-2 text-center font-mono">{row.c168 || '-'}</td>
+                  <td className="py-2 px-2 text-center font-mono">{row.c169 || '-'}</td>
+                  <td className="py-2 px-2 text-center font-mono">{row.c170 || '-'}</td>
+                  <td className="py-2 px-2 text-center font-mono text-rose-600">{row.c171 || '-'}</td>
+                  <td className="py-2 px-2 text-center font-mono">{row.c165 || '-'}</td>
+                  <td className="py-2 px-2 text-center font-mono">{row.cS165 || '-'}</td>
+                  <td className="py-2 px-2 text-center font-mono font-bold bg-slate-100/70">{row.tot}</td>
+                  <td className="py-2 px-2 text-center font-mono font-bold text-emerald-700 bg-emerald-50/40">{row.dev}</td>
+                  <td className="py-2 px-2 text-center font-mono font-black text-blue-700 bg-blue-50/40">{row.pct}</td>
+                </tr>
+              ))}
+              <tr className="bg-slate-900 text-white font-black text-[11px] border-t-2 border-slate-700">
+                <td className="py-2.5 px-3 rounded-bl-lg tracking-wider">TOTAL GENERAL</td>
+                <td className="py-2.5 px-2 text-center font-mono bg-slate-800 text-amber-300">{sujetosRows.total.c167}</td>
+                <td className="py-2.5 px-2 text-center font-mono bg-slate-800 text-amber-300">{sujetosRows.total.c168}</td>
+                <td className="py-2.5 px-2 text-center font-mono bg-slate-800 text-amber-300">{sujetosRows.total.c169}</td>
+                <td className="py-2.5 px-2 text-center font-mono bg-slate-800 text-amber-300">{sujetosRows.total.c170}</td>
+                <td className="py-2.5 px-2 text-center font-mono bg-slate-800 text-rose-300">{sujetosRows.total.c171}</td>
+                <td className="py-2.5 px-2 text-center font-mono bg-slate-800 text-amber-300">{sujetosRows.total.c165}</td>
+                <td className="py-2.5 px-2 text-center font-mono bg-slate-800 text-amber-300">{sujetosRows.total.cS165}</td>
+                <td className="py-2.5 px-2 text-center font-mono text-white">{sujetosRows.total.tot}</td>
+                <td className="py-2.5 px-2 text-center font-mono text-emerald-300 bg-emerald-950/60">{sujetosRows.total.dev}</td>
+                <td className="py-2.5 px-2 text-center font-mono text-cyan-300 bg-blue-950/60 rounded-br-lg">{sujetosRows.total.pct}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
         <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
           <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
@@ -941,7 +1265,7 @@ export const MonthlyStatsView: React.FC<MonthlyStatsViewProps> = ({
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-xs font-black text-slate-900">{nombre}</span>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
-                    {stat.total} boletas
+                    {stat.total} diligencias
                   </span>
                 </div>
                 <div className="text-[11px] text-slate-600 flex items-center justify-between mb-1">

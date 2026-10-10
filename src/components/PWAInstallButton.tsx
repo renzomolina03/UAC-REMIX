@@ -6,19 +6,27 @@ export const PWAInstallButton: React.FC = () => {
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
   const [showIOSGuide, setShowIOSGuide] = useState(false);
 
-  // Si ya está instalada o abierta en modo aplicación nativa, no mostrar el botón
+  // Si ya está instalada o abierta en modo aplicación nativa de escritorio
   if (isInstalled) {
-    return null;
+    return (
+      <div 
+        className="flex items-center gap-1.5 rounded-lg border border-emerald-400/50 bg-emerald-950/70 px-2.5 py-1 text-xs font-bold text-emerald-300 shadow-sm"
+        title="Aplicación instalada y lista para uso directo en este equipo."
+      >
+        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span className="hidden sm:inline">App Instalada</span>
+      </div>
+    );
   }
 
-  // Flujo para Chrome / Edge / Android / Computadora de escritorio
+  // Flujo directo para Chrome / Edge / Android cuando el navegador emite el evento de instalación
   if (isInstallable) {
     return (
       <button
         type="button"
         onClick={install}
         className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all cursor-pointer border border-blue-400/40 hover:scale-[1.02] active:scale-[0.98]"
-        title="Instalar esta aplicación en tu computadora para abrirla directamente desde el escritorio, incluso sin internet"
+        title="Instalar esta aplicación en tu computadora para abrirla directamente desde el escritorio"
       >
         <Download className="w-3.5 h-3.5" />
         <span>Instalar App en la PC</span>
@@ -50,7 +58,7 @@ export const PWAInstallButton: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowIOSGuide(false)}
-                  className="text-slate-400 hover:text-white p-1"
+                  className="text-slate-400 hover:text-white p-1 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -70,7 +78,7 @@ export const PWAInstallButton: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowIOSGuide(false)}
-                className="mt-4 w-full rounded-lg bg-blue-600 hover:bg-blue-500 py-2 text-xs font-bold text-white transition"
+                className="mt-4 w-full rounded-lg bg-blue-600 hover:bg-blue-500 py-2 text-xs font-bold text-white transition cursor-pointer"
               >
                 Entendido
               </button>
@@ -81,5 +89,6 @@ export const PWAInstallButton: React.FC = () => {
     );
   }
 
+  // Si no está en estado instalable, no mostrar botón
   return null;
 };

@@ -210,6 +210,7 @@ export async function crearUsuariosIniciales(): Promise<UsuarioJudicial[]> {
       telefono: '0275-8812345',
       passwordHash,
       salt,
+      passwordPlano: c.clavePlana,
       pinRapidoHash,
       activo: true,
       intentosFallidos: 0,
@@ -245,6 +246,18 @@ export async function obtenerUsuariosRegistrados(): Promise<UsuarioJudicial[]> {
     const nuevosOficiales = await crearUsuariosIniciales();
 
     if (existing && existing.length > 0) {
+      // Garantizar que todos tengan passwordPlano si son cuentas conocidas o tienen clave
+      let huboCambios = false;
+      existing.forEach(u => {
+        if (!u.passwordPlano) {
+          const demoMatch = CUENTAS_DEMO.find(d => d.username.toLowerCase() === u.username.toLowerCase());
+          if (demoMatch) {
+            u.passwordPlano = demoMatch.clavePlana;
+            huboCambios = true;
+          }
+        }
+      });
+
       // Verificar si ya tiene los 3 roles nuevos
       const usernames = existing.map(u => u.username.toLowerCase());
       let faltan = false;
@@ -255,7 +268,7 @@ export async function obtenerUsuariosRegistrados(): Promise<UsuarioJudicial[]> {
           if (found) existing.push(found);
         }
       }
-      if (faltan) {
+      if (faltan || huboCambios) {
         guardarUsuariosRegistrados(existing);
       }
       return existing;
@@ -277,6 +290,217 @@ export function guardarUsuariosRegistrados(usuarios: UsuarioJudicial[]): void {
     guardarEnIndexedDB(STORAGE_KEY_AUTH_USERS, usuarios).catch(() => {});
   } catch (e) {
     console.error('Error guardando usuarios:', e);
+  }
+}
+
+// ----------------------------------------------------
+// 3.1 Operaciones CRUD de Usuarios Judiciales
+// ----------------------------------------------------
+export interface CrearUsuarioInput {
+  username: string;
+  nombreCompleto: string;
+  cedula: string;
+  cargo: string;
+  rol: RolUsuario;
+  email?: string;
+  telefono?: string;
+  passwordPlano: string;
+}
+
+export async function crearNuevoUsuarioJudicial(
+  datos: CrearUsuarioInput,
+  autorUsername: string = 'SUPERVISOR'
+): Promise<{ exito: boolean; mensaje: string; usuario?: UsuarioJudicial }> {
+  try {
+    const cleanUsername = datos.username.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+    if (!cleanUsername || cleanUsername.length < 3) {
+      return { exito: false, mensaje: 'El nombre de usuario debe tener al menos 3 caracteres alfanuméricos.' };
+    }
+    if (!datos.passwordPlano || datos.passwordPlano.length < 4) {
+      return { exito: false, mensaje: 'La contraseña debe tener al menos 4 caracteres.' };
+    }
+
+    const usuarios = await obtenerUsuariosRegistrados();
+    const yaExiste = usuarios.some(u => u.username.toLowerCase() === cleanUsername);
+    if (yaExiste) {
+      return { exito: false, mensaje: `El usuario @${cleanUsername} ya se encuentra registrado en el despacho.` };
+    }
+
+    const salt = generarSalt();
+    const passwordHash = await hashStringSHA256(datos.passwordPlano, salt);
+    const pinRapidoHash = await hashStringSHA256('123456', salt);
+
+    const nuevoUsuario: UsuarioJudicial = {
+      id: `usr_${cleanUsername}_${Date.now()}`,
+      username: cleanUsername,
+      nombreCompleto: datos.nombreCompleto.trim(),
+      cedula: datos.cedula.trim(),
+      cargo: datos.cargo.trim(),
+      rol: datos.rol,
+      email: datos.email?.trim() || `${cleanUsername}@tsj.gob.ve`,
+      telefono: datos.telefono?.trim() || '',
+      passwordHash,
+      salt,
+      passwordPlano: datos.passwordPlano,
+      pinRapidoHash,
+      activo: true,
+      intentosFallidos: 0,
+      bloqueadoHasta: null,
+      ultimoAcceso: null,
+      fechaCreacion: new Date().toISOString(),
+      requiereCambioClave: false,
+    };
+
+    const actualizados = [...usuarios, nuevoUsuario];
+    guardarUsuariosRegistrados(actualizados);
+
+    registrarEventoAuditoria(
+      'CREAR_USUARIO',
+      autorUsername,
+      `Creación de nuevo usuario @${cleanUsername} con rol ${datos.rol} (${datos.nombreCompleto}).`,
+      'INFO',
+      nuevoUsuario.id
+    );
+
+    return { exito: true, mensaje: `Usuario @${cleanUsername} creado exitosamente.`, usuario: nuevoUsuario };
+  } catch (error) {
+    console.error('Error al crear usuario:', error);
+    return { exito: false, mensaje: 'Ocurrió un error inesperado al registrar el usuario.' };
+  }
+}
+
+export async function actualizarUsuarioJudicial(
+  id: string,
+  cambios: {
+    nombreCompleto?: string;
+    cedula?: string;
+    cargo?: string;
+    rol?: RolUsuario;
+    email?: string;
+    telefono?: string;
+    activo?: boolean;
+    username?: string;
+  },
+  autorUsername: string = 'SUPERVISOR'
+): Promise<{ exito: boolean; mensaje: string; usuario?: UsuarioJudicial }> {
+  try {
+    const usuarios = await obtenerUsuariosRegistrados();
+    const index = usuarios.findIndex(u => u.id === id);
+    if (index === -1) {
+      return { exito: false, mensaje: 'Usuario no encontrado.' };
+    }
+
+    const anterior = usuarios[index];
+
+    // Si intenta cambiar username, verificar no colisión
+    if (cambios.username) {
+      const cleanUser = cambios.username.trim().toLowerCase();
+      const colision = usuarios.some(u => u.id !== id && u.username.toLowerCase() === cleanUser);
+      if (colision) {
+        return { exito: false, mensaje: `El nombre de usuario @${cleanUser} ya está en uso por otra cuenta.` };
+      }
+      anterior.username = cleanUser;
+    }
+
+    if (cambios.nombreCompleto !== undefined) anterior.nombreCompleto = cambios.nombreCompleto.trim();
+    if (cambios.cedula !== undefined) anterior.cedula = cambios.cedula.trim();
+    if (cambios.cargo !== undefined) anterior.cargo = cambios.cargo.trim();
+    if (cambios.rol !== undefined) anterior.rol = cambios.rol;
+    if (cambios.email !== undefined) anterior.email = cambios.email.trim();
+    if (cambios.telefono !== undefined) anterior.telefono = cambios.telefono.trim();
+    if (cambios.activo !== undefined) anterior.activo = cambios.activo;
+
+    guardarUsuariosRegistrados(usuarios);
+
+    registrarEventoAuditoria(
+      'EDITAR_USUARIO',
+      autorUsername,
+      `Actualización de datos para @${anterior.username} (${anterior.nombreCompleto}).`,
+      'INFO',
+      id
+    );
+
+    return { exito: true, mensaje: `Datos de @${anterior.username} actualizados correctamente.`, usuario: anterior };
+  } catch (error) {
+    console.error('Error al actualizar usuario:', error);
+    return { exito: false, mensaje: 'Error al actualizar el usuario judicial.' };
+  }
+}
+
+export async function eliminarUsuarioJudicialDefinitivo(
+  id: string,
+  autorUsername: string = 'SUPERVISOR'
+): Promise<{ exito: boolean; mensaje: string }> {
+  try {
+    const usuarios = await obtenerUsuariosRegistrados();
+    const usuarioAEliminar = usuarios.find(u => u.id === id);
+    if (!usuarioAEliminar) {
+      return { exito: false, mensaje: 'Usuario no encontrado.' };
+    }
+
+    // Proteger para no eliminar el único supervisor
+    const supervisorsRestantes = usuarios.filter(u => (u.rol === 'SUPERVISOR' || u.rol === 'SUPER_ADMIN') && u.id !== id);
+    if (supervisorsRestantes.length === 0) {
+      return { exito: false, mensaje: 'No se puede eliminar la cuenta: debe permanecer al menos un Supervisor activo en el despacho judicial.' };
+    }
+
+    const filtrados = usuarios.filter(u => u.id !== id);
+    guardarUsuariosRegistrados(filtrados);
+
+    registrarEventoAuditoria(
+      'ELIMINAR_USUARIO',
+      autorUsername,
+      `Eliminación definitiva de la cuenta @${usuarioAEliminar.username} (${usuarioAEliminar.nombreCompleto}, Rol: ${usuarioAEliminar.rol}).`,
+      'CRITICAL',
+      id
+    );
+
+    return { exito: true, mensaje: `Usuario @${usuarioAEliminar.username} eliminado definitivamente.` };
+  } catch (error) {
+    console.error('Error al eliminar usuario:', error);
+    return { exito: false, mensaje: 'Error al eliminar el usuario judicial.' };
+  }
+}
+
+export async function cambiarPasswordUsuarioDirecto(
+  id: string,
+  nuevaPasswordPlana: string,
+  autorUsername: string = 'SUPERVISOR'
+): Promise<{ exito: boolean; mensaje: string }> {
+  try {
+    if (!nuevaPasswordPlana || nuevaPasswordPlana.length < 4) {
+      return { exito: false, mensaje: 'La contraseña debe tener al menos 4 caracteres.' };
+    }
+
+    const usuarios = await obtenerUsuariosRegistrados();
+    const usuario = usuarios.find(u => u.id === id);
+    if (!usuario) {
+      return { exito: false, mensaje: 'Usuario no encontrado.' };
+    }
+
+    const nuevoSalt = generarSalt();
+    const nuevoHash = await hashStringSHA256(nuevaPasswordPlana, nuevoSalt);
+
+    usuario.salt = nuevoSalt;
+    usuario.passwordHash = nuevoHash;
+    usuario.passwordPlano = nuevaPasswordPlana;
+    usuario.intentosFallidos = 0;
+    usuario.bloqueadoHasta = null;
+
+    guardarUsuariosRegistrados(usuarios);
+
+    registrarEventoAuditoria(
+      'CAMBIO_CLAVE',
+      autorUsername,
+      `Cambio de contraseña por Supervisor para el usuario @${usuario.username}.`,
+      'WARNING',
+      id
+    );
+
+    return { exito: true, mensaje: `Contraseña de @${usuario.username} actualizada exitosamente.` };
+  } catch (error) {
+    console.error('Error al cambiar contraseña:', error);
+    return { exito: false, mensaje: 'Error al actualizar la contraseña del usuario.' };
   }
 }
 

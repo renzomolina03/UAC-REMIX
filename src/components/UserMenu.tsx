@@ -7,7 +7,8 @@ import {
   ShieldCheck, 
   ChevronDown, 
   FileSearch,
-  Clock
+  Clock,
+  Users
 } from 'lucide-react';
 import { SesionActiva } from '../types/auth';
 
@@ -16,6 +17,7 @@ interface UserMenuProps {
   onBloquearEstacion: () => void;
   onAbrirCambioPassword: () => void;
   onAbrirAuditoria: () => void;
+  onAbrirCredencialesUsuarios?: () => void;
   onCerrarSesion: () => void;
 }
 
@@ -24,6 +26,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({
   onBloquearEstacion,
   onAbrirCambioPassword,
   onAbrirAuditoria,
+  onAbrirCredencialesUsuarios,
   onCerrarSesion
 }) => {
   const [menuAbierto, setMenuAbierto] = useState(false);
@@ -45,6 +48,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({
     : 'TSJ';
 
   const isSuper = sesion.rol === 'SUPER_ADMIN';
+  const isSupervisor = sesion.rol === 'SUPERVISOR' || sesion.rol === 'SUPER_ADMIN';
   const isCoord = sesion.rol === 'COORDINADOR';
   const isAlguacil = sesion.rol === 'ALGUACIL';
 
@@ -120,6 +124,26 @@ export const UserMenu: React.FC<UserMenuProps> = ({
               <Lock className="w-4 h-4 text-amber-300" />
               <span>Bloquear Estación de Trabajo</span>
             </button>
+
+            {isSupervisor && onAbrirCredencialesUsuarios && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuAbierto(false);
+                  onAbrirCredencialesUsuarios();
+                }}
+                className="w-full px-4 py-2 flex items-center gap-2.5 text-blue-100 hover:text-white hover:bg-white/15 transition-colors text-left cursor-pointer"
+              >
+                <Users className="w-4 h-4 text-amber-300" />
+                <div className="flex flex-col">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <span>Credenciales y Usuarios</span>
+                    <span className="text-[9px] px-1.5 py-0.2 bg-amber-500/20 text-amber-300 rounded border border-amber-500/40 font-semibold">Supervisor</span>
+                  </span>
+                  <span className="text-[10px] text-blue-200">Crear, editar, eliminar y contraseñas</span>
+                </div>
+              </button>
+            )}
 
             <button
               type="button"

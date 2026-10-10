@@ -308,6 +308,7 @@ export interface BoletaJudicial {
   
   // Fecha y tipo de audiencia
   esSoloNotificacion: boolean;
+  esUrgente?: boolean; // Marca boleta como urgente según reglas judiciales o forzado manual
   fechaAudiencia: string; // YYYY-MM-DD o 'NOTIFICACION'
   horaAudiencia?: string; // Ej: "09:30 AM"
   tipoAudiencia?: string; // Preliminar, Apertura de Juicio, Continuación, Notificación, Convocatoria
@@ -471,6 +472,95 @@ export function validarRequisitosDevuelta(boleta: {
     puedeSerDevuelta: true,
     tieneArticulo: true,
     tieneAlguacil: true,
+    mensajeError: '',
+  };
+}
+
+/**
+ * Valida si una boleta y todas sus partes asociadas (con el mismo Nº de Causa y Nº de Boleta)
+ * están completamente practicadas para poder ser devueltas al tribunal o enviadas a acuses.
+ * Si alguna parte (ej: fiscalía, defensa, imputado, víctima) aún no ha sido practicada,
+ * NINGUNA puede ser devuelta como devuelta para acuses ya que pertenece a la misma causa y boleta.
+ */
+export function validarGrupoBoletaCompletoParaDevuelta(
+  boleta: BoletaJudicial,
+  todasLasBoletas: BoletaJudicial[]
+): {
+  puedeDevolverse: boolean;
+  boletasGrupo: BoletaJudicial[];
+  boletasFaltantes: BoletaJudicial[];
+  mensajeError: string;
+} {
+  // 1. Primero validar los requisitos de la boleta en sí (Artículo COPP y Alguacil)
+  const reqPropia = validarRequisitosDevuelta(boleta);
+  if (!reqPropia.puedeSerDevuelta) {
+    return {
+      puedeDevolverse: false,
+      boletasGrupo: [boleta],
+      boletasFaltantes: [boleta],
+      mensajeError: reqPropia.mensajeError,
+    };
+  }
+
+  const causaActual = (boleta.numeroCausa || '').trim().toUpperCase();
+  const boletaNumActual = (boleta.boletaNumero || '').trim().toUpperCase();
+
+  // Si no tiene causa o boleta válida, solo depende de ella misma
+  if (!causaActual || !boletaNumActual) {
+    return {
+      puedeDevolverse: true,
+      boletasGrupo: [boleta],
+      boletasFaltantes: [],
+      mensajeError: '',
+    };
+  }
+
+  // 2. Buscar todas las boletas hermanas con el mismo Nº de Causa y Nº de Boleta
+  const hermanas = todasLasBoletas.filter(b => {
+    if (b.id === boleta.id) return false;
+    const c = (b.numeroCausa || '').trim().toUpperCase();
+    const n = (b.boletaNumero || '').trim().toUpperCase();
+    return c === causaActual && n === boletaNumActual;
+  });
+
+  if (hermanas.length === 0) {
+    return {
+      puedeDevolverse: true,
+      boletasGrupo: [boleta],
+      boletasFaltantes: [],
+      mensajeError: '',
+    };
+  }
+
+  // 3. Verificar si alguna de las hermanas aún NO está practicada
+  const faltantes = hermanas.filter(h => {
+    // Si ya está devuelta al tribunal o tiene artículo y alguacil válidos, está lista
+    if (h.devueltaAlTribunal) return false;
+    const reqH = validarRequisitosDevuelta(h);
+    return !reqH.puedeSerDevuelta;
+  });
+
+  if (faltantes.length > 0) {
+    const partesFaltantes = faltantes
+      .map(f => {
+        const nombre = (f.notificadoCitado || '').trim();
+        const caracter = getCaracterDisplay(f.tipoCitado);
+        return nombre ? `${nombre} [${caracter}]` : caracter;
+      })
+      .join(', ');
+
+    return {
+      puedeDevolverse: false,
+      boletasGrupo: [boleta, ...hermanas],
+      boletasFaltantes: faltantes,
+      mensajeError: `⚠️ No se puede devolver al tribunal ni enviar para acuses:\nEsta boleta pertenece a la Causa ${boleta.numeroCausa} y Boleta Nº ${boleta.boletaNumero}, la cual tiene partes aún pendientes por practicar:\n👉 ${partesFaltantes}.\n\nNinguna parte puede devolverse hasta que TODAS las partes (Fiscalía, Defensa, Imputado, Víctima, etc.) de esta misma boleta y expediente hayan sido practicadas.`,
+    };
+  }
+
+  return {
+    puedeDevolverse: true,
+    boletasGrupo: [boleta, ...hermanas],
+    boletasFaltantes: [],
     mensajeError: '',
   };
 }
